@@ -6,3 +6,4 @@ data/*
 
 models/*
 !models/meta.pkl
+!models/main_chess_linear_probe.pth
