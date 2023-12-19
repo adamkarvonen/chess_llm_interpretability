@@ -1,2 +1,8 @@
 __pycache__/
 **/.vscode
+
+data/*
+!data/filtered_games.csv
+
+models/*
+!models/meta.pkl
