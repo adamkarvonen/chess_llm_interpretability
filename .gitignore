@@ -2,7 +2,8 @@ __pycache__/
 **/.vscode
 
 data/*
-!data/filtered_games.csv
+!data/train.csv
+!data/test.csv
 
 models/*
 !models/meta.pkl
