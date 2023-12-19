@@ -1,4 +1,5 @@
 transformer_lens
 tqdm
 numpy
+python-chess
 torch = 2.1.1 # 2.0.1 also works, transformer lens cannot use 2.0.0 or 2.1.0
