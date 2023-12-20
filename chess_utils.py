@@ -73,7 +73,6 @@ def create_state_stack(
     initial_states.append(custom_board_to_state_fn(board))
     # Apply each move to the board
     for move in moves_string.split():
-        # because all games are truncated to len 680, often the last move is partial and invalid
         try:
             count += 1
             # Skip move numbers
@@ -84,6 +83,8 @@ def create_state_stack(
 
             initial_states.append(custom_board_to_state_fn(board))
         except:
+            # because all games are truncated to len 680, often the last move is partial and invalid
+            # so we don't need to log this, as it will happen on most games
             break
 
     # if count % 100 == 0:
