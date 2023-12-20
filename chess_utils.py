@@ -135,6 +135,8 @@ def create_state_stacks(
 
     # Convert the list of tensors to a single tensor
     final_state_stack = torch.stack(state_stacks)
+    final_state_stack = final_state_stack.unsqueeze(0)  # Add a dimension for the modes
+    # Currently, there is just one mode and it isn't necessary. For now, I'm maintaining the dimension for future use.
     return final_state_stack
 
 
@@ -142,42 +144,40 @@ def state_stack_to_one_hot(
     num_modes: int,
     num_rows: int,
     num_cols: int,
-    num_options: int,
+    min_val: int,
+    max_val: int,
     device: torch.device,
     state_stack: np.ndarray,
 ) -> torch.Tensor:
+    """Input shape: assert(state_stacks_all_chars.shape) == (modes, sample_size, game_length, rows, cols)
+    Output shape: assert(state_stacks_one_hot.shape) == (modes, sample_size, game_length, rows, cols, one_hot_range)
+    """
+    range_size = max_val - min_val + 1
+
+    # Initialize the one-hot tensor
     one_hot = torch.zeros(
-        num_modes,  # blank vs color (mode)
-        state_stack.shape[0],  # num games
-        state_stack.shape[1],  # num moves
-        num_rows,  # rows
-        num_cols,  # cols
-        num_options,  # the two options
+        state_stack.shape[0],  # num modes
+        state_stack.shape[1],  # num games
+        state_stack.shape[2],  # num moves
+        num_rows,
+        num_cols,
+        range_size,
         device=device,
         dtype=int,
     )
-    one_hot[:, ..., 0] = state_stack == 0
-    one_hot[:, ..., 1] = state_stack == -1
-    one_hot[:, ..., 2] = state_stack == 1
+
+    for val in range(min_val, max_val + 1):
+        one_hot[..., val - min_val] = state_stack == val
+
     return one_hot
 
 
-def one_hot_to_state_stack(one_hot: torch.Tensor) -> np.ndarray:
+def one_hot_to_state_stack(one_hot: torch.Tensor, min_val: int) -> np.ndarray:
+    """Input shape: assert(probe_out.shape) == (modes, sample_size, num_white_moves, rows, cols, one_hot_range)
+    Output shape: assert(state_stacks_probe_outputs.shape) == (modes, sample_size, num_white_moves, rows, cols)
     """
-    Convert a one-hot encoded tensor back to its state representation.
-
-    :param one_hot: A one-hot encoded tensor.
-    :return: A numpy array representing the original state.
-    """
-    # Get the indices of the max values (1s in one-hot)
     indices = torch.argmax(one_hot, dim=-1)
-
-    # Map indices back to the original state representation
-    # Mapping: 0 -> 0, 1 -> -1, 2 -> 1
-    state_stack = indices.numpy()
-    state_stack[state_stack == 1] = -1
-    state_stack[state_stack == 2] = 1
-
+    state_stack = indices.numpy() + min_val
     return state_stack
 
 
