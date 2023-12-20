@@ -7,4 +7,5 @@ data/*
 
 models/*
 !models/meta.pkl
-!models/main_chess_linear_probe.pth
+!models/chess_color_probe_layer_12.pth
+!models/chess_piece_probe_layer_12.pth
