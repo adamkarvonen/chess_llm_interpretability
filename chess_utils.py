@@ -14,6 +14,16 @@ def pretty_print_state_stack(state: np.ndarray) -> None:
     for row in reversed(state):
         print(" ".join(piece_symbols[piece] for piece in row))
 
+def board_to_random_state(board: chess.Board) -> np.ndarray:
+    """Given a chess board object, return a 8x8 np.ndarray.
+    Every square should be randomly assigned to 1, -1, or 0.
+    This is to sanity check the linear probe.
+    In the 8x8 array, row 0 is A1-H1 (White), row 1 is A2-H2, etc."""
+    state = np.zeros((8, 8), dtype=int)
+    for i in range(64):
+        state[i // 8, i % 8] = np.random.choice([-1, 0, 1])
+
+    return state
 
 def board_to_piece_color_state(board: chess.Board) -> np.ndarray:
     """Given a chess board object, return a 8x8 np.ndarray.
