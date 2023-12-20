@@ -14,6 +14,7 @@ def pretty_print_state_stack(state: np.ndarray) -> None:
     for row in reversed(state):
         print(" ".join(piece_symbols[piece] for piece in row))
 
+
 def board_to_random_state(board: chess.Board) -> np.ndarray:
     """Given a chess board object, return a 8x8 np.ndarray.
     Every square should be randomly assigned to 1, -1, or 0.
@@ -24,6 +25,7 @@ def board_to_random_state(board: chess.Board) -> np.ndarray:
         state[i // 8, i % 8] = np.random.choice([-1, 0, 1])
 
     return state
+
 
 def board_to_piece_color_state(board: chess.Board) -> np.ndarray:
     """Given a chess board object, return a 8x8 np.ndarray.
@@ -158,6 +160,25 @@ def state_stack_to_one_hot(
     one_hot[:, ..., 1] = state_stack == -1
     one_hot[:, ..., 2] = state_stack == 1
     return one_hot
+
+
+def one_hot_to_state_stack(one_hot: torch.Tensor) -> np.ndarray:
+    """
+    Convert a one-hot encoded tensor back to its state representation.
+
+    :param one_hot: A one-hot encoded tensor.
+    :return: A numpy array representing the original state.
+    """
+    # Get the indices of the max values (1s in one-hot)
+    indices = torch.argmax(one_hot, dim=-1)
+
+    # Map indices back to the original state representation
+    # Mapping: 0 -> 0, 1 -> -1, 2 -> 1
+    state_stack = indices.numpy()
+    state_stack[state_stack == 1] = -1
+    state_stack[state_stack == 2] = 1
+
+    return state_stack
 
 
 def find_dots_indices(moves_string: str) -> list[int]:
