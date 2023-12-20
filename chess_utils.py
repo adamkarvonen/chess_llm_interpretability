@@ -59,7 +59,7 @@ def board_to_piece_state(board: chess.Board) -> np.ndarray:
     return state
 
 
-def create_state_stack(moves_string: str) -> np.ndarray:
+def create_state_stack(moves_string: str, custom_board_to_state) -> np.ndarray:
     """Given a string of PGN format moves, create an 8x8 np.ndarray for every character in the string."""
 
     board = chess.Board()
@@ -67,7 +67,7 @@ def create_state_stack(moves_string: str) -> np.ndarray:
     count = 1
 
     # Scan 1: Creates states, with length = number of moves in the game
-    initial_states.append(board_to_piece_color_state(board))
+    initial_states.append(custom_board_to_state(board))
     # Apply each move to the board
     for move in moves_string.split():
         # because all games are truncated to len 680, often the last move is partial and invalid
@@ -79,7 +79,7 @@ def create_state_stack(moves_string: str) -> np.ndarray:
             else:
                 board.push_san(move)
 
-            initial_states.append(board_to_piece_color_state(board))
+            initial_states.append(custom_board_to_state(board))
         except:
             break
 
@@ -102,11 +102,18 @@ def create_state_stack(moves_string: str) -> np.ndarray:
     return np.array(expanded_states)
 
 
-def create_state_stacks(moves_strings: list[str]) -> torch.Tensor:
+def create_state_stacks(
+    moves_strings: list[str], custom_board_to_state
+) -> torch.Tensor:
+    """Given a list of strings of PGN format moves, create a tensor of shape (len(moves_strings), 8, 8).
+    custom_board_to_state is a function that takes a chess.Board object and returns a 8x8 np.ndarray for
+    board state, or 1x1 for centipawn advantage."""
     state_stacks = []
 
     for board in moves_strings:
-        state_stack = torch.tensor(create_state_stack(board)).long()
+        state_stack = torch.tensor(
+            create_state_stack(board, custom_board_to_state)
+        ).long()
         state_stacks.append(state_stack)
 
     # Convert the list of tensors to a single tensor
