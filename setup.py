@@ -129,7 +129,7 @@ model_state = checkpoint["model"]
 #     print(key, value.shape)
 
 
-def convert_to_transformer_lens_format(in_sd, n_layers=16, n_heads=8):
+def convert_to_transformer_lens_format(in_sd, n_layers, n_heads):
     out_sd = {}
     out_sd["pos_embed.W_pos"] = in_sd["_orig_mod.transformer.wpe.weight"]
     out_sd["embed.W_E"] = in_sd["_orig_mod.transformer.wte.weight"]
@@ -205,7 +205,7 @@ if LOAD_AND_CONVERT_CHECKPOINT:
             synthetic_checkpoint, n_layers=n_layers, n_heads=n_heads
         )
     )
-    torch.save(model.state_dict(), f"{MODEL_DIR}tf_lens_16.pth")
+    torch.save(model.state_dict(), f"{MODEL_DIR}tf_lens_{n_layers}.pth")
 
 # An example input
 sample_input = torch.tensor([[15, 6, 4, 27, 9, 0, 25, 10, 0, 7, 4, 19]]).to(device)
