@@ -120,7 +120,8 @@ device = "cpu"
 
 MODEL_DIR = "models/"
 
-checkpoint = torch.load(f"{MODEL_DIR}ckpt_3487k_iters_pre_dropout_no_optim.pt")
+# checkpoint = torch.load(f"{MODEL_DIR}ckpt_3487k_iters_pre_dropout_no_optim.pt", map_location=device)
+checkpoint = torch.load(f"{MODEL_DIR}32_ckpt.pt", map_location=device)
 
 # Print the keys of the checkpoint dictionary
 print(checkpoint.keys())
@@ -184,7 +185,7 @@ if LOAD_AND_CONVERT_CHECKPOINT:
             print(name, param.shape)
 
     n_heads = 8
-    n_layers = 16
+    n_layers = 32
 
     cfg = HookedTransformerConfig(
         n_layers=n_layers,
