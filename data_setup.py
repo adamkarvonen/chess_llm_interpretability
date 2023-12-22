@@ -38,9 +38,13 @@ print(decode(encode(";1.e4 ")))
 
 
 def process_csv(csv_filename: str):
+    prefix = ""
     split = "train_"
     if "test" in csv_filename:
         split = "test_"
+
+    if "skill" in csv_filename:
+        prefix = "skill_"
 
     df = pd.read_csv(f"{DATA_DIR}{csv_filename}")
     row_length = len(df["transcript"].iloc[0])
@@ -51,7 +55,7 @@ def process_csv(csv_filename: str):
     ), "Not all transcripts are of length {}".format(row_length)
 
     df["transcript"].to_csv(
-        f"{DATA_DIR}{split}board_seqs_string.csv", index=False, header=False
+        f"{DATA_DIR}{prefix}{split}board_seqs_str.csv", index=False, header=False
     )
 
     print(len(df), len(df["transcript"].iloc[0]))
@@ -65,7 +69,7 @@ def process_csv(csv_filename: str):
     print(board_seqs_int.shape)
     assert board_seqs_int.shape == (num_games, row_length)
 
-    np.save(f"{DATA_DIR}{split}board_seqs_int.npy", board_seqs_int)
+    np.save(f"{DATA_DIR}{prefix}{split}board_seqs_int.npy", board_seqs_int)
 
     df = pd.read_csv(f"{DATA_DIR}{csv_filename}")
     dots_indices_series = df["transcript"].apply(find_dots_indices)
@@ -82,9 +86,23 @@ def process_csv(csv_filename: str):
     dots_indices = np.array(dots_indices_series.apply(list).tolist())
     print(dots_indices.shape)
     assert dots_indices.shape == (num_games, shortest_length)
-    np.save(f"{DATA_DIR}{split}dots_indices.npy", dots_indices)
+    np.save(f"{DATA_DIR}{prefix}{split}dots_indices.npy", dots_indices)
+
+    if prefix == "skill_":
+        df = pd.read_csv(f"{DATA_DIR}{csv_filename}")
+        # Extract skill levels as integers
+        skill_levels_list = [int(x.split()[1]) for x in df["player_two"]]
+
+        # Convert the list to a numpy array
+        skill_level = np.array(skill_levels_list)
+        print(skill_level.shape)
+        assert skill_level.shape == (num_games,)
+        print("Skill level shape:", skill_level.shape)
+        np.save(f"{DATA_DIR}{prefix}{split}skill_level.npy", skill_level)
 
 
-process_csv("train.csv")
-process_csv("test.csv")
+# process_csv("train.csv")
+# process_csv("test.csv")
+process_csv("skill_train.csv")
+process_csv("skill_test.csv")
 ### END DATA PREPARATION ###

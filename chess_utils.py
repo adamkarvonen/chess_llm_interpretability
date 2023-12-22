@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pickle
 import torch
-from typing import Callable
+from typing import Callable, Optional
 
 
 def pretty_print_state_stack(state: np.ndarray) -> None:
@@ -15,7 +15,9 @@ def pretty_print_state_stack(state: np.ndarray) -> None:
         print(" ".join(piece_symbols[piece] for piece in row))
 
 
-def board_to_random_state(board: chess.Board) -> np.ndarray:
+def board_to_random_state(
+    board: chess.Board, skill: Optional[int] = None
+) -> np.ndarray:
     """Given a chess board object, return a 8x8 np.ndarray.
     Every square should be randomly assigned to 1, -1, or 0.
     This is to sanity check the linear probe.
@@ -27,7 +29,18 @@ def board_to_random_state(board: chess.Board) -> np.ndarray:
     return state
 
 
-def board_to_piece_color_state(board: chess.Board) -> np.ndarray:
+def board_to_skill_state(board: chess.Board, skill: int) -> np.ndarray:
+    """Given a chess board object, return a 1x1 np.ndarray.
+    The 1x1 array should tell what skill level the player is."""
+    state = np.zeros((1, 1), dtype=int)
+    state[0][0] = skill
+
+    return state
+
+
+def board_to_piece_color_state(
+    board: chess.Board, skill: Optional[int] = None
+) -> np.ndarray:
     """Given a chess board object, return a 8x8 np.ndarray.
     The 8x8 array should tell if each square is black, white, or blank.
     White is 1, black is -1, and blank is 0.
@@ -42,7 +55,7 @@ def board_to_piece_color_state(board: chess.Board) -> np.ndarray:
     return state
 
 
-def board_to_piece_state(board: chess.Board) -> np.ndarray:
+def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
     """Given a chess board object, return an 8x8 np.ndarray.
     The 8x8 array should tell what piece is on each square. A white pawn could be 1, a black pawn could be -1, etc.
     Blank squares should be 0.
@@ -73,7 +86,9 @@ def board_to_piece_state(board: chess.Board) -> np.ndarray:
 
 
 def create_state_stack(
-    moves_string: str, custom_board_to_state_fn: Callable[[chess.Board], np.ndarray]
+    moves_string: str,
+    custom_board_to_state_fn: Callable[[chess.Board], np.ndarray],
+    skill: Optional[int] = None,
 ) -> np.ndarray:
     """Given a string of PGN format moves, create an 8x8 np.ndarray for every character in the string."""
 
@@ -82,7 +97,7 @@ def create_state_stack(
     count = 1
 
     # Scan 1: Creates states, with length = number of moves in the game
-    initial_states.append(custom_board_to_state_fn(board))
+    initial_states.append(custom_board_to_state_fn(board, skill))
     # Apply each move to the board
     for move in moves_string.split():
         try:
@@ -93,7 +108,7 @@ def create_state_stack(
             else:
                 board.push_san(move)
 
-            initial_states.append(custom_board_to_state_fn(board))
+            initial_states.append(custom_board_to_state_fn(board, skill))
         except:
             # because all games are truncated to len 680, often the last move is partial and invalid
             # so we don't need to log this, as it will happen on most games
@@ -121,15 +136,19 @@ def create_state_stack(
 def create_state_stacks(
     moves_strings: list[str],
     custom_board_to_state_fn: Callable[[chess.Board], np.ndarray],
+    skill_array: Optional[np.ndarray] = None,
 ) -> torch.Tensor:
     """Given a list of strings of PGN format moves, create a tensor of shape (len(moves_strings), 8, 8).
     custom_board_to_state is a function that takes a chess.Board object and returns a 8x8 np.ndarray for
     board state, or 1x1 for centipawn advantage."""
     state_stacks = []
+    skill = None
 
-    for board in moves_strings:
+    for idx, board in enumerate(moves_strings):
+        if skill_array is not None:
+            skill = skill_array[idx]
         state_stack = torch.tensor(
-            create_state_stack(board, custom_board_to_state_fn)
+            create_state_stack(board, custom_board_to_state_fn, skill)
         ).long()
         state_stacks.append(state_stack)
 
