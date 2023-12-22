@@ -29,10 +29,10 @@ def board_to_random_state(
     return state
 
 
-def board_to_skill_state(board: chess.Board, skill: int) -> np.ndarray:
+def board_to_skill_state(board: chess.Board, skill: float) -> np.ndarray:
     """Given a chess board object, return a 1x1 np.ndarray.
     The 1x1 array should tell what skill level the player is."""
-    state = np.zeros((1, 1), dtype=int)
+    state = np.zeros((1, 1), dtype=float)
     state[0][0] = skill
 
     return state
@@ -88,7 +88,7 @@ def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> np.
 def create_state_stack(
     moves_string: str,
     custom_board_to_state_fn: Callable[[chess.Board], np.ndarray],
-    skill: Optional[int] = None,
+    skill: Optional[float] = None,
 ) -> np.ndarray:
     """Given a string of PGN format moves, create an 8x8 np.ndarray for every character in the string."""
 
@@ -149,7 +149,7 @@ def create_state_stacks(
             skill = skill_array[idx]
         state_stack = torch.tensor(
             create_state_stack(board, custom_board_to_state_fn, skill)
-        ).long()
+        ).to(dtype=torch.float32)
         state_stacks.append(state_stack)
 
     # Convert the list of tensors to a single tensor
