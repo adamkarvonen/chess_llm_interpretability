@@ -3,6 +3,7 @@ import chess
 import numpy as np
 import pandas as pd
 import pickle
+import chess_utils
 
 DATA_DIR = "data/"
 
@@ -13,14 +14,6 @@ DATA_DIR = "data/"
 # - {split}board_seqs_int.npy board_seqs_string.csv but with the strings converted to integer sequences using the meta.pkl file
 # - {split}dots_indices.npy a NumPy array of indices of every '.' in the string. This will hopefully provide a reasonable starting point for training a linear probe.
 # This was developed in chess_utils.ipynb. I just copy pasted the relevant cells into here for convenience. Sorry for the messiness.
-
-
-def find_dots_indices(moves_string: str) -> list[int]:
-    """Returns a NumPy array of indices of every '.' in the string.
-    This will hopefully provide a reasonable starting point for training a linear probe.
-    """
-    indices = [index for index, char in enumerate(moves_string) if char == "."]
-    return indices
 
 
 # meta is used to encode the string pgn strings into integer sequences
@@ -72,7 +65,7 @@ def process_csv(csv_filename: str):
     np.save(f"{DATA_DIR}{prefix}{split}board_seqs_int.npy", board_seqs_int)
 
     df = pd.read_csv(f"{DATA_DIR}{csv_filename}")
-    dots_indices_series = df["transcript"].apply(find_dots_indices)
+    dots_indices_series = df["transcript"].apply(chess_utils.find_dots_indices)
 
     shortest_length = dots_indices_series.apply(len).min()
     print("Shortest length:", shortest_length)
