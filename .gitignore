@@ -5,6 +5,7 @@ wandb/
 data/*
 !data/train.csv
 !data/test.csv
+!data/train_test_splitter.ipynb
 
 models/*
 !models/meta.pkl
