@@ -201,10 +201,33 @@ def one_hot_to_state_stack(one_hot: torch.Tensor, min_val: int) -> np.ndarray:
 
 
 def find_dots_indices(moves_string: str) -> list[int]:
-    """Returns a NumPy array of indices of every '.' in the string.
+    """Returns a list of ints of indices of every '.' in the string.
     This will hopefully provide a reasonable starting point for training a linear probe.
     """
     indices = [index for index, char in enumerate(moves_string) if char == "."]
+    return indices
+
+
+def find_spaces_indices(moves_string: str) -> list[int]:
+    """Returns a list of ints of indices of every ' ' in the string."""
+    indices = [index for index, char in enumerate(moves_string) if char == " "]
+    return indices
+
+
+def find_custom_indices(
+    df_filename: str, custom_indexing_fn: Callable[[str], list[int]]
+) -> np.ndarray:
+    df = pd.read_csv(df_filename)
+    indices_series = df["transcript"].apply(custom_indexing_fn)
+    shortest_length = indices_series.apply(len).min()
+    print("Shortest length:", shortest_length)
+
+    indices_series = indices_series.apply(lambda x: x[:shortest_length])
+    assert all(
+        len(lst) == shortest_length for lst in indices_series
+    ), "Not all lists have the same length"
+
+    indices = np.array(indices_series.apply(list).tolist())
     return indices
 
 
