@@ -214,6 +214,56 @@ def find_spaces_indices(moves_string: str) -> list[int]:
     return indices
 
 
+def find_odd_spaces_indices(moves_string: str) -> list[int]:
+    """Returns a list of ints of odd indices of every ' ' in the string.
+    There is some duplicated logic but it simplifies using the Callable function."""
+    indices = [index for index, char in enumerate(moves_string) if char == " "]
+    # Select only the odd indices: start from index 1, go till the end, step by 2
+    odd_indices = indices[1::2]
+    return odd_indices
+
+
+def find_even_spaces_indices(moves_string: str) -> list[int]:
+    """Returns a list of ints of even indices of every ' ' in the string.
+    There is some duplicated logic but it simplifies using the Callable function."""
+    indices = [index for index, char in enumerate(moves_string) if char == " "]
+    # Select only the even indices: start from index 0, go till the end, step by 2
+    even_indices = indices[::2]
+    return even_indices
+
+
+def find_even_indices_offset_one(moves_string: str) -> list[int]:
+    """
+    Returns a list of ints of even indices of every ' ' in the string, each incremented by one.
+    If the incremented index would be greater than the length of the string, it is not included.
+    """
+    indices = [index for index, char in enumerate(moves_string) if char == " "]
+    even_indices = indices[::2]
+
+    # Increment each even index by one, ensuring it doesn't exceed the string length
+    incremented_indices = [
+        index + 1 for index in even_indices if index + 1 < len(moves_string)
+    ]
+
+    return incremented_indices
+
+
+def find_odd_indices_offset_one(moves_string: str) -> list[int]:
+    """
+    Returns a list of ints of odd indices of every ' ' in the string, each incremented by one.
+    If the incremented index would be greater than the length of the string, it is not included.
+    """
+    indices = [index for index, char in enumerate(moves_string) if char == " "]
+    odd_indices = indices[1::2]
+
+    # Increment each odd index by one, ensuring it doesn't exceed the string length
+    incremented_indices = [
+        index + 1 for index in odd_indices if index + 1 < len(moves_string)
+    ]
+
+    return incremented_indices
+
+
 def find_custom_indices(
     df_filename: str, custom_indexing_fn: Callable[[str], list[int]]
 ) -> np.ndarray:
