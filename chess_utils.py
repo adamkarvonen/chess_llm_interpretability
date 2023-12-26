@@ -167,11 +167,22 @@ def state_stack_to_one_hot(
     max_val: int,
     device: torch.device,
     state_stack: np.ndarray,
+    user_mapping: Optional[dict[int, int]] = None,
 ) -> torch.Tensor:
     """Input shape: assert(state_stacks_all_chars.shape) == (modes, sample_size, game_length, rows, cols)
     Output shape: assert(state_stacks_one_hot.shape) == (modes, sample_size, game_length, rows, cols, one_hot_range)
     """
     range_size = max_val - min_val + 1
+
+    mapping = {}
+    if user_mapping:
+        mapping = user_mapping
+        min_val = min(mapping.values())
+        max_val = max(mapping.values())
+        range_size = max_val - min_val + 1
+    else:
+        for val in range(min_val, max_val + 1):
+            mapping[val] = [val - min_val]
 
     # Initialize the one-hot tensor
     one_hot = torch.zeros(
@@ -185,8 +196,8 @@ def state_stack_to_one_hot(
         dtype=int,
     )
 
-    for val in range(min_val, max_val + 1):
-        one_hot[..., val - min_val] = state_stack == val
+    for val in mapping:
+        one_hot[..., mapping[val]] = state_stack == val
 
     return one_hot
 
