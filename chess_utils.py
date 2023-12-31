@@ -182,7 +182,7 @@ def state_stack_to_one_hot(
         range_size = max_val - min_val + 1
     else:
         for val in range(min_val, max_val + 1):
-            mapping[val] = [val - min_val]
+            mapping[val] = val - min_val
 
     # Initialize the one-hot tensor
     one_hot = torch.zeros(

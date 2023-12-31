@@ -29,8 +29,10 @@ device = "cpu"
 
 MODEL_DIR = "models/"
 
-# checkpoint = torch.load(f"{MODEL_DIR}ckpt_3487k_iters_pre_dropout_no_optim.pt", map_location=device)
-checkpoint = torch.load(f"{MODEL_DIR}32_ckpt.pt", map_location=device)
+checkpoint = torch.load(
+    f"{MODEL_DIR}ckpt_3487k_iters_pre_dropout_no_optim.pt", map_location=device
+)
+# checkpoint = torch.load(f"{MODEL_DIR}16_ckpt.pt", map_location=device)
 
 # Print the keys of the checkpoint dictionary
 print(checkpoint.keys())
@@ -39,50 +41,105 @@ model_state = checkpoint["model"]
 #     print(key, value.shape)
 
 
-def convert_to_transformer_lens_format(in_sd, n_layers, n_heads):
-    out_sd = {}
-    out_sd["pos_embed.W_pos"] = in_sd["_orig_mod.transformer.wpe.weight"]
-    out_sd["embed.W_E"] = in_sd["_orig_mod.transformer.wte.weight"]
+def convert_nanogpt_weights(
+    old_state_dict, cfg: HookedTransformerConfig, bias: bool = False
+):
+    """For https://github.com/karpathy/nanoGPT
+    There are two complications with converting nanogpt models:
+    The first is that some state dicts have an unwanted prefix on keys that needs to be removed.
+    The second is that the models can be saved with or without bias. By default, there
+    is no bias. This function can handle both cases."""
+    # Nanogpt models saved after torch.compile() have this unwanted prefix
+    # This is a simple way to remove it
+    unwanted_prefix = "_orig_mod."
+    for k, v in list(old_state_dict.items()):
+        if k.startswith(unwanted_prefix):
+            old_state_dict[k[len(unwanted_prefix) :]] = old_state_dict.pop(k)
 
-    out_sd["ln_final.w"] = in_sd["_orig_mod.transformer.ln_f.weight"]
-    out_sd["ln_final.b"] = torch.zeros_like(in_sd["_orig_mod.transformer.ln_f.weight"])
-    out_sd["unembed.W_U"] = in_sd["_orig_mod.lm_head.weight"].T
+    new_state_dict = {}
+    new_state_dict["pos_embed.W_pos"] = old_state_dict["transformer.wpe.weight"]
+    new_state_dict["embed.W_E"] = old_state_dict["transformer.wte.weight"]
 
-    for layer in range(n_layers):
-        layer_key = f"_orig_mod.transformer.h.{layer}"
+    new_state_dict["ln_final.w"] = old_state_dict["transformer.ln_f.weight"]
+    new_state_dict["ln_final.b"] = torch.zeros_like(
+        old_state_dict["transformer.ln_f.weight"]
+    )
+    new_state_dict["unembed.W_U"] = old_state_dict["lm_head.weight"].T
 
-        # Layer Norms
-        out_sd[f"blocks.{layer}.ln1.w"] = in_sd[f"{layer_key}.ln_1.weight"]
-        out_sd[f"blocks.{layer}.ln1.b"] = torch.zeros_like(
-            in_sd[f"{layer_key}.ln_1.weight"]
+    if bias:
+        new_state_dict["ln_final.b"] = old_state_dict["transformer.ln_f.bias"]
+
+    for layer in range(cfg.n_layers):
+        layer_key = f"transformer.h.{layer}"
+
+        new_state_dict[f"blocks.{layer}.ln1.w"] = old_state_dict[
+            f"{layer_key}.ln_1.weight"
+        ]
+        # A bias of zeros is required for folding layer norm
+        new_state_dict[f"blocks.{layer}.ln1.b"] = torch.zeros_like(
+            old_state_dict[f"{layer_key}.ln_1.weight"]
         )
-        out_sd[f"blocks.{layer}.ln2.w"] = in_sd[f"{layer_key}.ln_2.weight"]
-        out_sd[f"blocks.{layer}.ln2.b"] = torch.zeros_like(
-            in_sd[f"{layer_key}.ln_2.weight"]
+        new_state_dict[f"blocks.{layer}.ln2.w"] = old_state_dict[
+            f"{layer_key}.ln_2.weight"
+        ]
+        new_state_dict[f"blocks.{layer}.ln2.b"] = torch.zeros_like(
+            old_state_dict[f"{layer_key}.ln_2.weight"]
         )
 
-        W = in_sd[f"{layer_key}.attn.c_attn.weight"]
+        W = old_state_dict[f"{layer_key}.attn.c_attn.weight"]
         W_Q, W_K, W_V = torch.tensor_split(W, 3, dim=0)
         W_Q = einops.rearrange(W_Q, "(i h) m->i m h", i=cfg.n_heads)
         W_K = einops.rearrange(W_K, "(i h) m->i m h", i=cfg.n_heads)
         W_V = einops.rearrange(W_V, "(i h) m->i m h", i=cfg.n_heads)
-        out_sd[f"blocks.{layer}.attn.W_Q"] = W_Q
-        out_sd[f"blocks.{layer}.attn.W_K"] = W_K
-        out_sd[f"blocks.{layer}.attn.W_V"] = W_V
-        # out_sd[f"blocks.{layer}.attn.b_Q"] = torch.zeros_like(W_Q)
-        # out_sd[f"blocks.{layer}.attn.b_K"] = torch.zeros_like(W_K)
-        # out_sd[f"blocks.{layer}.attn.b_V"] = torch.zeros_like(W_V)
-        W_O = in_sd[f"{layer_key}.attn.c_proj.weight"]
+        new_state_dict[f"blocks.{layer}.attn.W_Q"] = W_Q
+        new_state_dict[f"blocks.{layer}.attn.W_K"] = W_K
+        new_state_dict[f"blocks.{layer}.attn.W_V"] = W_V
+
+        W_O = old_state_dict[f"{layer_key}.attn.c_proj.weight"]
         W_O = einops.rearrange(W_O, "m (i h)->i h m", i=cfg.n_heads)
-        out_sd[f"blocks.{layer}.attn.W_O"] = W_O
+        new_state_dict[f"blocks.{layer}.attn.W_O"] = W_O
 
-        # MLP Weights
-        out_sd[f"blocks.{layer}.mlp.W_in"] = in_sd[f"{layer_key}.mlp.c_fc.weight"].T
-        # out_sd[f"blocks.{layer}.mlp.b_in"] = torch.zeros_like(in_sd[f"{layer_key}.mlp.c_fc.weight"][0])
-        out_sd[f"blocks.{layer}.mlp.W_out"] = in_sd[f"{layer_key}.mlp.c_proj.weight"].T
-        # out_sd[f"blocks.{layer}.mlp.b_out"] = torch.zeros_like(in_sd[f"{layer_key}.mlp.c_proj.weight"][0])
+        new_state_dict[f"blocks.{layer}.mlp.W_in"] = old_state_dict[
+            f"{layer_key}.mlp.c_fc.weight"
+        ].T
+        new_state_dict[f"blocks.{layer}.mlp.W_out"] = old_state_dict[
+            f"{layer_key}.mlp.c_proj.weight"
+        ].T
 
-    return out_sd
+        if bias:
+            new_state_dict[f"blocks.{layer}.ln1.b"] = old_state_dict[
+                f"{layer_key}.ln_1.bias"
+            ]
+            new_state_dict[f"blocks.{layer}.ln2.b"] = old_state_dict[
+                f"{layer_key}.ln_2.bias"
+            ]
+            new_state_dict[f"blocks.{layer}.mlp.b_in"] = old_state_dict[
+                f"{layer_key}.mlp.c_fc.bias"
+            ]
+            new_state_dict[f"blocks.{layer}.mlp.b_out"] = old_state_dict[
+                f"{layer_key}.mlp.c_proj.bias"
+            ]
+
+            B = old_state_dict[f"{layer_key}.attn.c_attn.bias"]
+            B_Q, B_K, B_V = torch.tensor_split(B, 3, dim=0)
+            B_Q = einops.rearrange(B_Q, "(i h)->i h", i=cfg.n_heads)
+            B_K = einops.rearrange(B_K, "(i h)->i h", i=cfg.n_heads)
+            B_V = einops.rearrange(B_V, "(i h)->i h", i=cfg.n_heads)
+            new_state_dict[f"blocks.{layer}.attn.b_Q"] = B_Q
+            new_state_dict[f"blocks.{layer}.attn.b_K"] = B_K
+            new_state_dict[f"blocks.{layer}.attn.b_V"] = B_V
+            new_state_dict[f"blocks.{layer}.attn.b_O"] = old_state_dict[
+                f"{layer_key}.attn.c_proj.bias"
+            ]
+
+            new_state_dict[f"blocks.{layer}.mlp.b_in"] = old_state_dict[
+                f"{layer_key}.mlp.c_fc.bias"
+            ].T
+            new_state_dict[f"blocks.{layer}.mlp.b_out"] = old_state_dict[
+                f"{layer_key}.mlp.c_proj.bias"
+            ].T
+
+    return new_state_dict
 
 
 if LOAD_AND_CONVERT_CHECKPOINT:
@@ -94,7 +151,7 @@ if LOAD_AND_CONVERT_CHECKPOINT:
             print(name, param.shape)
 
     n_heads = 8
-    n_layers = 32
+    n_layers = 16
 
     cfg = HookedTransformerConfig(
         n_layers=n_layers,
@@ -111,9 +168,7 @@ if LOAD_AND_CONVERT_CHECKPOINT:
     model.to(device)
 
     model.load_and_process_state_dict(
-        convert_to_transformer_lens_format(
-            synthetic_checkpoint, n_layers=n_layers, n_heads=n_heads
-        )
+        convert_nanogpt_weights(synthetic_checkpoint, cfg)
     )
     torch.save(model.state_dict(), f"{MODEL_DIR}tf_lens_{n_layers}.pth")
 
