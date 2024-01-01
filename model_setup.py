@@ -29,10 +29,9 @@ device = "cpu"
 
 MODEL_DIR = "models/"
 
-checkpoint = torch.load(
-    f"{MODEL_DIR}ckpt_3487k_iters_pre_dropout_no_optim.pt", map_location=device
-)
-# checkpoint = torch.load(f"{MODEL_DIR}16_ckpt.pt", map_location=device)
+model_name = "lichess_16_ckpt.pt"
+
+checkpoint = torch.load(f"{MODEL_DIR}{model_name}", map_location=device)
 
 # Print the keys of the checkpoint dictionary
 print(checkpoint.keys())
@@ -170,7 +169,8 @@ if LOAD_AND_CONVERT_CHECKPOINT:
     model.load_and_process_state_dict(
         convert_nanogpt_weights(synthetic_checkpoint, cfg)
     )
-    torch.save(model.state_dict(), f"{MODEL_DIR}tf_lens_{n_layers}.pth")
+    recorded_model_name = model_name.split(".")[0]
+    torch.save(model.state_dict(), f"{MODEL_DIR}tf_lens_{recorded_model_name}.pth")
 
 # An example input
 sample_input = torch.tensor([[15, 6, 4, 27, 9, 0, 25, 10, 0, 7, 4, 19]]).to(device)
