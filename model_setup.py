@@ -15,6 +15,8 @@ from transformer_lens import (
     ActivationCache,
 )
 
+import os
+
 ### BEGIN MODEL SETUP ###
 # Our pytorch model is in the nanogpt format. For easy linear probing of the residual stream, we want to convert
 # it to the transformer lens format. This is done in the following code block.
@@ -30,6 +32,16 @@ device = "cpu"
 MODEL_DIR = "models/"
 
 model_name = "lichess_16_ckpt.pt"
+model_name = "stockfish_8layers_ckpt_no_optimizer.pt"
+
+n_heads = 8
+n_layers = 8
+
+if not os.path.exists(f"{MODEL_DIR}{model_name}"):
+    state_dict = utils.download_file_from_hf("adamkarvonen/chess_llms", model_name)
+    model = torch.load(state_dict, map_location=device)
+    torch.save(model, f"{MODEL_DIR}{model_name}")
+
 
 checkpoint = torch.load(f"{MODEL_DIR}{model_name}", map_location=device)
 
@@ -148,9 +160,6 @@ if LOAD_AND_CONVERT_CHECKPOINT:
             "_orig_mod.transformer.h"
         ):
             print(name, param.shape)
-
-    n_heads = 8
-    n_layers = 16
 
     cfg = HookedTransformerConfig(
         n_layers=n_layers,
