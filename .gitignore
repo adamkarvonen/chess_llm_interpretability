@@ -12,5 +12,5 @@ models/*
 !models/view_model.ipynb
 
 linear_probes/*
-!linear_probes/tf_lens_lichess_16_ckpt_chess_piece_probe_layer_12.pth
+!linear_probes/saved_probes/
 !linear_probes/view_probe.ipynb
