@@ -11,3 +11,6 @@ models/*
 !models/meta.pkl
 !models/tf_lens_16_chess_color_probe_layer_12.pth
 !models/tf_lens_16_chess_piece_probe_layer_12.pth
+
+linear_probes/*
+!linear_probes/tf_lens_lichess_16_ckpt_chess_piece_probe_layer_12.pth
