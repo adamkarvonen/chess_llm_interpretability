@@ -31,11 +31,10 @@ device = "cpu"
 
 MODEL_DIR = "models/"
 
-model_name = "lichess_16_ckpt.pt"
-model_name = "stockfish_8layers_ckpt_no_optimizer.pt"
+model_name = "lichess_16layers_ckpt_no_optimizer.pt"
 
 n_heads = 8
-n_layers = 8
+n_layers = 16  # NOTE: This is pretty janky. You can infer the number of layers from the model name, so use that to set this.
 
 if not os.path.exists(f"{MODEL_DIR}{model_name}"):
     state_dict = utils.download_file_from_hf("adamkarvonen/chess_llms", model_name)
