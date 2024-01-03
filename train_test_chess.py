@@ -66,8 +66,6 @@ max_lr = 3e-4
 min_lr = max_lr / 10
 decay_lr = True
 
-# %%
-
 # meta is used to encode the string pgn strings into integer sequences
 with open(f"{MODEL_DIR}meta.pkl", "rb") as f:
     meta = pickle.load(f)
@@ -82,6 +80,9 @@ meta_round_trip_input = "1.e4 e6 2.Nf3"
 logger.info(encode(meta_round_trip_input))
 logger.info("Performing round trip test on meta")
 assert decode(encode(meta_round_trip_input)) == meta_round_trip_input
+
+# %%
+
 
 # %%
 
@@ -132,8 +133,6 @@ skill_config = Config(
     probing_for_skill=True,
     pos_start=25,
 )
-
-all_configs = [piece_config, color_config, random_config, skill_config]
 
 
 @dataclass
@@ -773,7 +772,7 @@ def test_linear_probe_cross_entropy(
         pickle.dump(data, f)
 
 
-def find_config_by_name(config_name: str, configs: list[Config]) -> Config:
+def find_config_by_name(config_name: str) -> Config:
     """
     Finds and returns the Config instance with a matching linear_probe_name.
 
@@ -784,7 +783,8 @@ def find_config_by_name(config_name: str, configs: list[Config]) -> Config:
     Returns:
         Optional[Config]: The matching Config instance, or None if not found.
     """
-    for config in configs:
+    all_configs = [piece_config, color_config, random_config, skill_config]
+    for config in all_configs:
         if config.linear_probe_name == config_name:
             return config
     raise ValueError(f"Config with name {config_name} not found")
@@ -792,94 +792,95 @@ def find_config_by_name(config_name: str, configs: list[Config]) -> Config:
 
 RUN_TEST_SET = True
 
-if RUN_TEST_SET:
-    saved_probes = [
-        file
-        for file in os.listdir(SAVED_PROBE_DIR)
-        if os.path.isfile(os.path.join(SAVED_PROBE_DIR, file))
-    ]
+if __name__ == "__main__":
+    if RUN_TEST_SET:
+        saved_probes = [
+            file
+            for file in os.listdir(SAVED_PROBE_DIR)
+            if os.path.isfile(os.path.join(SAVED_PROBE_DIR, file))
+        ]
 
-    print(saved_probes)
+        print(saved_probes)
 
-    for probe_to_test in saved_probes:
-        # probe_to_test = (
-        #     "tf_lens_randominit_16layers_ckpt_chess_skill_probe_layer_12.pth"
-        # )
-        probe_file_location = f"{SAVED_PROBE_DIR}{probe_to_test}"
-        with open(probe_file_location, "rb") as f:
-            state_dict = torch.load(f, map_location=torch.device(device))
-            print(state_dict.keys())
-            for key in state_dict.keys():
-                if key != "linear_probe":
-                    print(key, state_dict[key])
+        for probe_to_test in saved_probes:
+            # probe_to_test = (
+            #     "tf_lens_randominit_16layers_ckpt_chess_skill_probe_layer_12.pth"
+            # )
+            probe_file_location = f"{SAVED_PROBE_DIR}{probe_to_test}"
+            with open(probe_file_location, "rb") as f:
+                state_dict = torch.load(f, map_location=torch.device(device))
+                print(state_dict.keys())
+                for key in state_dict.keys():
+                    if key != "linear_probe":
+                        print(key, state_dict[key])
 
-            config = find_config_by_name(state_dict["config_name"], all_configs)
-            layer = state_dict["layer"]
-            model_name = state_dict["model_name"]
-            dataset_prefix = state_dict["dataset_prefix"]
-            process_data = state_dict["process_data"]
-            column_name = state_dict["column_name"]
-            pos_start = state_dict["pos_start"]
-            levels_of_interest = None
-            if "levels_of_interest" in state_dict.keys():
-                levels_of_interest = state_dict["levels_of_interest"]
-            config.levels_of_interest = levels_of_interest
-            indexing_function_name = state_dict["indexing_function_name"]
-            n_layers = state_dict["n_layers"]
+                config = find_config_by_name(state_dict["config_name"])
+                layer = state_dict["layer"]
+                model_name = state_dict["model_name"]
+                dataset_prefix = state_dict["dataset_prefix"]
+                process_data = state_dict["process_data"]
+                column_name = state_dict["column_name"]
+                pos_start = state_dict["pos_start"]
+                levels_of_interest = None
+                if "levels_of_interest" in state_dict.keys():
+                    levels_of_interest = state_dict["levels_of_interest"]
+                config.levels_of_interest = levels_of_interest
+                indexing_function_name = state_dict["indexing_function_name"]
+                n_layers = state_dict["n_layers"]
 
-            split = "test"
-            input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-            config = set_config_min_max_vals_and_column_name(
-                config, input_dataframe_file, dataset_prefix
-            )
-            misc_logging_dict = {
-                "split": split,
-                "dataset_prefix": dataset_prefix,
-                "model_name": model_name,
-                "n_layers": n_layers,
-            }
+                split = "test"
+                input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
+                config = set_config_min_max_vals_and_column_name(
+                    config, input_dataframe_file, dataset_prefix
+                )
+                misc_logging_dict = {
+                    "split": split,
+                    "dataset_prefix": dataset_prefix,
+                    "model_name": model_name,
+                    "n_layers": n_layers,
+                }
 
-            probe_data = construct_linear_probe_data(
-                input_dataframe_file,
-                layer,
-                dataset_prefix,
-                split,
-                n_layers,
-                model_name,
-                config,
-            )
-            test_linear_probe_cross_entropy(
-                probe_file_location, probe_data, config, misc_logging_dict
-            )
-else:
-    config = piece_config
-    dataset_prefix = "lichess_"
-    # dataset_prefix = "stockfish_"
-    layer = 12
-    split = "train"
-    n_layers = 16
-    model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
-    # model_name = "tf_lens_lichess_16layers_ckpt_no_optimizer"
-    # config.levels_of_interest = [0, 5]
-    input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-    config = set_config_min_max_vals_and_column_name(
-        config, input_dataframe_file, dataset_prefix
-    )
+                probe_data = construct_linear_probe_data(
+                    input_dataframe_file,
+                    layer,
+                    dataset_prefix,
+                    split,
+                    n_layers,
+                    model_name,
+                    config,
+                )
+                test_linear_probe_cross_entropy(
+                    probe_file_location, probe_data, config, misc_logging_dict
+                )
+    else:
+        config = piece_config
+        dataset_prefix = "lichess_"
+        # dataset_prefix = "stockfish_"
+        layer = 12
+        split = "train"
+        n_layers = 16
+        model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
+        # model_name = "tf_lens_lichess_16layers_ckpt_no_optimizer"
+        # config.levels_of_interest = [0, 5]
+        input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
+        config = set_config_min_max_vals_and_column_name(
+            config, input_dataframe_file, dataset_prefix
+        )
 
-    misc_logging_dict = {
-        "split": split,
-        "dataset_prefix": dataset_prefix,
-        "model_name": model_name,
-        "n_layers": n_layers,
-    }
+        misc_logging_dict = {
+            "split": split,
+            "dataset_prefix": dataset_prefix,
+            "model_name": model_name,
+            "n_layers": n_layers,
+        }
 
-    probe_data = construct_linear_probe_data(
-        input_dataframe_file,
-        layer,
-        dataset_prefix,
-        split,
-        n_layers,
-        model_name,
-        config,
-    )
-    train_linear_probe_cross_entropy(probe_data, config, misc_logging_dict)
+        probe_data = construct_linear_probe_data(
+            input_dataframe_file,
+            layer,
+            dataset_prefix,
+            split,
+            n_layers,
+            model_name,
+            config,
+        )
+        train_linear_probe_cross_entropy(probe_data, config, misc_logging_dict)
