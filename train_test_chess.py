@@ -41,6 +41,8 @@ DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 SAVED_PROBE_DIR = "linear_probes/saved_probes/"
 PROCESSING_DF_FILENAME = f"{DATA_DIR}temporary_in_processing.csv"
+MAXIMUM_TRAINING_GAMES = 25000
+MAXIMUM_TESTING_GAMES = 10000
 
 device = (
     "cuda"
@@ -267,7 +269,7 @@ def train_linear_probe_cross_entropy(
     # I use min because the probes seem to mostly converge within 25k games
     num_games = min(
         ((len(probe_data.board_seqs_int) // batch_size) * batch_size),
-        (25000 // batch_size) * batch_size,
+        (MAXIMUM_TRAINING_GAMES // batch_size) * batch_size,
     )  # Unfortunately, num_games must be divisible by batch_size TODO: Fix this
     max_iters = num_games * num_epochs
 
@@ -571,7 +573,7 @@ def test_linear_probe_cross_entropy(
 
     num_games = min(
         ((len(probe_data.board_seqs_int) // batch_size) * batch_size),
-        (500 // batch_size) * batch_size,
+        (MAXIMUM_TESTING_GAMES // batch_size) * batch_size,
     )  # Unfortunately, num_games must be divisible by batch_size TODO: Fix this
 
     one_hot_range = config.max_val - config.min_val + 1
