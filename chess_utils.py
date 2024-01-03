@@ -5,6 +5,16 @@ import pickle
 import torch
 from typing import Callable, Optional
 
+# Mapping of chess pieces to integers
+PIECE_TO_INT = {
+    chess.PAWN: 1,
+    chess.KNIGHT: 2,
+    chess.BISHOP: 3,
+    chess.ROOK: 4,
+    chess.QUEEN: 5,
+    chess.KING: 6,
+}
+
 
 def pretty_print_state_stack(state: np.ndarray) -> None:
     """Given a state stack, print each state in a readable format."""
@@ -61,22 +71,12 @@ def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> np.
     Blank squares should be 0.
     In the 8x8 array, row 0 is A1-H1 (White), row 1 is A2-H2, etc."""
 
-    # Mapping of chess pieces to integers
-    piece_to_int = {
-        chess.PAWN: 1,
-        chess.KNIGHT: 2,
-        chess.BISHOP: 3,
-        chess.ROOK: 4,
-        chess.QUEEN: 5,
-        chess.KING: 6,
-    }
-
     # Because state is initialized to all 0s, we only need to change the values of the pieces
     state = np.zeros((8, 8), dtype=int)
     for i in range(64):
         piece = board.piece_at(i)
         if piece:
-            piece_value = piece_to_int[piece.piece_type]
+            piece_value = PIECE_TO_INT[piece.piece_type]
             # Multiply by -1 if the piece is black
             if piece.color == chess.BLACK:
                 piece_value *= -1
@@ -198,6 +198,8 @@ def state_stack_to_one_hot(
 
     for val in mapping:
         one_hot[..., mapping[val]] = state_stack == val
+
+    print(mapping)
 
     return one_hot
 
