@@ -501,10 +501,12 @@ def construct_linear_probe_data(
     # Checking for foot guns
 
     if dataset_prefix == "lichess_":
-        assert "lichess" in model_name, "Are you sure you're using the right model?"
+        assert (
+            "stockfish" not in model_name
+        ), "Are you sure you're using the right model?"
 
     if dataset_prefix == "stockfish_":
-        assert "stockfish" in model_name, "Are you sure you're using the right model?"
+        assert "lichess" not in model_name, "Are you sure you're using the right model?"
 
     model = get_transformer_lens_model(model_name, n_layers)
     user_state_dict_one_hot_mapping = process_dataframe(input_dataframe_file, config)
@@ -792,13 +794,14 @@ if RUN_TEST_SET:
     saved_probes = [
         file
         for file in os.listdir(SAVED_PROBE_DIR)
-        if os.path.isfile(os.path.join(PROBE_DIR, file))
+        if os.path.isfile(os.path.join(SAVED_PROBE_DIR, file))
     ]
 
     print(saved_probes)
 
     for probe_to_test in saved_probes:
-        with open(probe_to_test, "rb") as f:
+        probe_file_location = f"{SAVED_PROBE_DIR}{probe_to_test}"
+        with open(probe_file_location, "rb") as f:
             state_dict = torch.load(f, map_location=torch.device(device))
             print(state_dict.keys())
             for key in state_dict.keys():
@@ -838,7 +841,7 @@ if RUN_TEST_SET:
                 config,
             )
             test_linear_probe_cross_entropy(
-                probe_to_test, probe_data, config, misc_logging_dict
+                probe_file_location, probe_data, config, misc_logging_dict
             )
 else:
     config = piece_config
