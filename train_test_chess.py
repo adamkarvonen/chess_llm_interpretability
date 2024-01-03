@@ -65,14 +65,6 @@ min_lr = max_lr / 10
 decay_lr = True
 
 # %%
-# RUN_TEST_SET = True
-
-# probe_to_test = ""
-# if RUN_TEST_SET:
-#     SPLIT = "test"
-#     probe_to_test = f"{SAVED_PROBE_DIR}tf_lens_lichess_16layers_ckpt_no_optimizer_chess_piece_probe_layer_12_pos_start_5.pth"
-# else:
-#     SPLIT = "train"
 
 # meta is used to encode the string pgn strings into integer sequences
 with open(f"{MODEL_DIR}meta.pkl", "rb") as f:
@@ -128,7 +120,6 @@ random_config = Config(
     linear_probe_name="chess_random_probe",
 )
 
-# NOTE: skill_config should only be used with the stockfish_ dataset
 skill_config = Config(
     min_val=-2,
     max_val=20,
@@ -139,13 +130,6 @@ skill_config = Config(
     probing_for_skill=True,
     pos_start=25,
 )
-
-all_configs = [
-    piece_config,
-    color_config,
-    random_config,
-    skill_config,
-]
 
 
 @dataclass
@@ -280,7 +264,7 @@ def train_linear_probe_cross_entropy(
     split: str,
 ):
     assert split == "train", "Don't train on the test set"
-    # I use min because the probes seem to converge within 25k games
+    # I use min because the probes seem to mostly converge within 25k games
     num_games = min(
         ((len(probe_data.board_seqs_int) // batch_size) * batch_size),
         (25000 // batch_size) * batch_size,
@@ -385,9 +369,7 @@ def train_linear_probe_cross_entropy(
             state_stack = chess_utils.create_state_stacks(
                 games_str, config.custom_board_state_function, games_skill
             )
-            # state_stack = state_stack[:, pos_start:pos_end, :, :]
             # logger.debug(state_stack.shape)
-            # Initialize a list to hold the indexed state stacks
             indexed_state_stacks = []
 
             for batch_idx in range(batch_size):
@@ -403,7 +385,6 @@ def train_linear_probe_cross_entropy(
                 indexed_state_stacks.append(indexed_state_stack)
 
             # Stack the indexed state stacks along the first dimension
-            # This results in a tensor of shape [2, 61, 8, 8] (assuming all batches have 61 indices)
             state_stack = torch.stack(indexed_state_stacks)
 
             # Use einops to rearrange the dimensions after stacking
@@ -444,7 +425,6 @@ def train_linear_probe_cross_entropy(
                 indexed_resid_posts.append(indexed_resid_post)
 
             # Stack the indexed state stacks along the first dimension
-            # This results in a tensor of shape [2, 61, 8, 8] (assuming all batches have 61 indices)
             resid_post = torch.stack(indexed_resid_posts)
             # logger.debug("Resid post", resid_post.shape)
             probe_out = einsum(
