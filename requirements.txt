@@ -1,6 +1,10 @@
-transformer_lens
-tqdm
-numpy
-python-chess
-torch = 2.1.1 # 2.0.1 also works, transformer lens cannot use 2.0.0 or 2.1.0
-wandb
+transformer_lens == 1.10.0
+tqdm == 4.66.1
+torch == 2.1.1 # 2.0.1 also works, transformer lens cannot use 2.0.0 or 2.1.0
+wandb == 0.16.0
+fancy_einsum == 0.0.3
+einops == 0.7.0
+numpy == 1.26.0
+python-chess == 1.999
+pandas == 2.1.1
+plotly == 5.18.0
