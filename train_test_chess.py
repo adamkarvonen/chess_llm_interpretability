@@ -300,40 +300,41 @@ def train_linear_probe_cross_entropy(
 
     # logger.debug(dots_indices.shape)
 
+    wandb_project = "chess_linear_probes"
+    wandb_run_name = f"{config.linear_probe_name}_{model_name}_layer_{probe_data.layer}_indexing_{indexing_function_name}"
+    if config.levels_of_interest is not None:
+        wandb_run_name += "_levels"
+        for level in config.levels_of_interest:
+            wandb_run_name += f"_{level}"
+
+    logging_dict = {
+        "linear_probe_name": config.linear_probe_name,
+        "model_name": model_name,
+        "layer": probe_data.layer,
+        "indexing_function_name": indexing_function_name,
+        "batch_size": batch_size,
+        "max_lr": max_lr,
+        "wd": wd,
+        "split": split,
+        "pos_start": config.pos_start,
+        "num_epochs": num_epochs,
+        "num_games": num_games,
+        "modes": modes,
+        "one_hot_range": one_hot_range,
+        "wandb_project": wandb_project,
+        "wandb_run_name": wandb_run_name,
+        "config_name": config.linear_probe_name,
+        "model_name": model_name,
+        "dataset_prefix": dataset_prefix,
+        "process_data": process_data,
+        "column_name": config.column_name,
+        "split": split,
+        "levels_of_interest": config.levels_of_interest,
+    }
+
     if wandb_logging:
         import wandb
 
-        wandb_project = "chess_linear_probes"
-        wandb_run_name = f"{config.linear_probe_name}_{model_name}_layer_{probe_data.layer}_indexing_{indexing_function_name}"
-        if config.levels_of_interest is not None:
-            wandb_run_name += "_levels"
-            for level in config.levels_of_interest:
-                wandb_run_name += f"_{level}"
-
-        logging_dict = {
-            "linear_probe_name": config.linear_probe_name,
-            "model_name": model_name,
-            "layer": probe_data.layer,
-            "indexing_function_name": indexing_function_name,
-            "batch_size": batch_size,
-            "max_lr": max_lr,
-            "wd": wd,
-            "split": split,
-            "pos_start": config.pos_start,
-            "num_epochs": num_epochs,
-            "num_games": num_games,
-            "modes": modes,
-            "one_hot_range": one_hot_range,
-            "wandb_project": wandb_project,
-            "wandb_run_name": wandb_run_name,
-            "config_name": config.linear_probe_name,
-            "model_name": model_name,
-            "dataset_prefix": dataset_prefix,
-            "process_data": process_data,
-            "column_name": config.column_name,
-            "split": split,
-            "levels_of_interest": config.levels_of_interest,
-        }
         wandb.init(project=wandb_project, name=wandb_run_name, config=logging_dict)
 
     current_iter = 0
@@ -556,37 +557,25 @@ def set_config_min_max_vals_and_column_name(
     return config
 
 
-config = piece_config
-dataset_prefix = "lichess_"
-# dataset_prefix = "stockfish_"
-layer = 12
-split = "train"
-n_layers = 16
-model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
-# model_name = "tf_lens_lichess_16layers_ckpt_no_optimizer"
-# config.levels_of_interest = [0, 5]
-input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-
-config = set_config_min_max_vals_and_column_name(
-    config, input_dataframe_file, dataset_prefix
-)
-
-probe_data = construct_linear_probe_data(
-    input_dataframe_file,
-    layer,
-    dataset_prefix,
-    split,
-    n_layers,
-    model_name,
-    config,
-)
-
-
-train_linear_probe_cross_entropy(probe_data, config, dataset_prefix, model_name, split)
-
-
 # %%
-def test_linear_probe_cross_entropy(probe_data: LinearProbeData):
+def test_linear_probe_cross_entropy(
+    probe_data: LinearProbeData,
+    config: Config,
+    dataset_prefix: str,
+    model_name: str,
+    split: str,
+):
+    assert split == "test", "Don't test on the train set"
+
+    num_games = min(
+        ((len(probe_data.board_seqs_int) // batch_size) * batch_size),
+        (10000 // batch_size) * batch_size,
+    )  # Unfortunately, num_games must be divisible by batch_size TODO: Fix this
+
+    one_hot_range = config.max_val - config.min_val + 1
+    if config.levels_of_interest is not None:
+        one_hot_range = len(config.levels_of_interest)
+
     linear_probe_name = (
         f"{PROBE_DIR}{model_name}_{config.linear_probe_name}_layer_{layer}.pth"
     )
@@ -594,6 +583,10 @@ def test_linear_probe_cross_entropy(probe_data: LinearProbeData):
     linear_probe = checkpoint["linear_probe"]
     logger.info(f"linear_probe shape: {linear_probe.shape}")
     logger.info(f"custom_indices shape: {probe_data.custom_indices.shape}")
+    indexing_function_name = config.custom_indexing_function.__name__
+    process_data = False
+    if config.levels_of_interest is not None:
+        process_data = True
 
     # logger.debug(dots_indices.shape)
 
@@ -771,6 +764,34 @@ def find_config_by_name(config_name: str, configs: list[Config]) -> Config:
             return config
     raise ValueError(f"Config with name {config_name} not found")
 
+
+config = piece_config
+dataset_prefix = "lichess_"
+# dataset_prefix = "stockfish_"
+layer = 12
+split = "train"
+n_layers = 16
+model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
+# model_name = "tf_lens_lichess_16layers_ckpt_no_optimizer"
+# config.levels_of_interest = [0, 5]
+input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
+
+config = set_config_min_max_vals_and_column_name(
+    config, input_dataframe_file, dataset_prefix
+)
+
+probe_data = construct_linear_probe_data(
+    input_dataframe_file,
+    layer,
+    dataset_prefix,
+    split,
+    n_layers,
+    model_name,
+    config,
+)
+
+
+train_linear_probe_cross_entropy(probe_data, config, dataset_prefix, model_name, split)
 
 # if RUN_TEST_SET:
 #     with open(probe_to_test, "rb") as f:
