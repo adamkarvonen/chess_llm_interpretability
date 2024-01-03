@@ -790,22 +790,33 @@ def find_config_by_name(config_name: str) -> Config:
     raise ValueError(f"Config with name {config_name} not found")
 
 
-RUN_TEST_SET = True
+RUN_TEST_SET = True  # If True, we will test the probes on the test set. If False, we will train the probes on the train set
+USE_PIECE_BOARD_STATE = True  # We will test or train a probe for piece board state
+# If USE_PIECE_BOARD_STATE is False, we will test or train a probe on predicting player ELO
+
+saved_piece_probe_name = "tf_lens_lichess_16layers_ckpt_no_optimizer_chess_piece_probe_layer_12_pos_start_0.pth"
+saved_skill_probe_name = (
+    "tf_lens_lichess_16layers_ckpt_no_optimizer_chess_skill_probe_layer_12.pth"
+)
 
 if __name__ == "__main__":
     if RUN_TEST_SET:
-        saved_probes = [
-            file
-            for file in os.listdir(SAVED_PROBE_DIR)
-            if os.path.isfile(os.path.join(SAVED_PROBE_DIR, file))
-        ]
+        # saved_probes = [
+        #     file
+        #     for file in os.listdir(SAVED_PROBE_DIR)
+        #     if os.path.isfile(os.path.join(SAVED_PROBE_DIR, file))
+        # ]
+        saved_probes = []
+
+        # Quick and janky way to select between piece and skill probes
+        if USE_PIECE_BOARD_STATE:
+            saved_probes.append(saved_piece_probe_name)
+        else:
+            saved_probes.append(saved_skill_probe_name)
 
         print(saved_probes)
 
         for probe_to_test in saved_probes:
-            # probe_to_test = (
-            #     "tf_lens_randominit_16layers_ckpt_chess_skill_probe_layer_12.pth"
-            # )
             probe_file_location = f"{SAVED_PROBE_DIR}{probe_to_test}"
             with open(probe_file_location, "rb") as f:
                 state_dict = torch.load(f, map_location=torch.device(device))
@@ -853,7 +864,12 @@ if __name__ == "__main__":
                     probe_file_location, probe_data, config, misc_logging_dict
                 )
     else:
-        config = piece_config
+        # Quick and janky way to select between piece and skill configs
+        config = None
+        if USE_PIECE_BOARD_STATE:
+            config = piece_config
+        else:
+            config = skill_config
         dataset_prefix = "lichess_"
         # dataset_prefix = "stockfish_"
         layer = 12
