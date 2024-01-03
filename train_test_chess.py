@@ -571,7 +571,7 @@ def test_linear_probe_cross_entropy(
 
     num_games = min(
         ((len(probe_data.board_seqs_int) // batch_size) * batch_size),
-        (10000 // batch_size) * batch_size,
+        (500 // batch_size) * batch_size,
     )  # Unfortunately, num_games must be divisible by batch_size TODO: Fix this
 
     one_hot_range = config.max_val - config.min_val + 1
@@ -800,6 +800,9 @@ if RUN_TEST_SET:
     print(saved_probes)
 
     for probe_to_test in saved_probes:
+        # probe_to_test = (
+        #     "tf_lens_randominit_16layers_ckpt_chess_skill_probe_layer_12.pth"
+        # )
         probe_file_location = f"{SAVED_PROBE_DIR}{probe_to_test}"
         with open(probe_file_location, "rb") as f:
             state_dict = torch.load(f, map_location=torch.device(device))
@@ -815,7 +818,10 @@ if RUN_TEST_SET:
             process_data = state_dict["process_data"]
             column_name = state_dict["column_name"]
             pos_start = state_dict["pos_start"]
-            levels_of_interest = state_dict["levels_of_interest"]
+            levels_of_interest = None
+            if "levels_of_interest" in state_dict.keys():
+                levels_of_interest = state_dict["levels_of_interest"]
+            config.levels_of_interest = levels_of_interest
             indexing_function_name = state_dict["indexing_function_name"]
             n_layers = state_dict["n_layers"]
 
