@@ -627,7 +627,9 @@ def test_linear_probe_cross_entropy(
     loss = 0
     accuracy = 0
     accuracy_list = []
-    probe_out_list = []
+    probe_out_list = (
+        []
+    )  # These are currently unused, they could be used to analyze error rate per turn or square
     state_stack_one_hot_list = []
     loss_list = []
     with torch.inference_mode():
@@ -751,13 +753,13 @@ def test_linear_probe_cross_entropy(
             current_iter += batch_size
 
             accuracy_list.append(accuracy)
-            probe_out_list.append(probe_out)
-            state_stack_one_hot_list.append(state_stack_one_hot)
+            # probe_out_list.append(probe_out)
+            # state_stack_one_hot_list.append(state_stack_one_hot)
             loss_list.append(loss)
     data = {
         "accuracy": accuracy_list,
-        "probe_out": probe_out_list,
-        "state_stack_one_hot": state_stack_one_hot_list,
+        # "probe_out": probe_out_list,
+        # "state_stack_one_hot": state_stack_one_hot_list,
         "loss": loss_list,
     }
 
@@ -831,7 +833,7 @@ if __name__ == "__main__":
                 dataset_prefix = state_dict["dataset_prefix"]
                 process_data = state_dict["process_data"]
                 column_name = state_dict["column_name"]
-                pos_start = state_dict["pos_start"]
+                config.pos_start = state_dict["pos_start"]
                 levels_of_interest = None
                 if "levels_of_interest" in state_dict.keys():
                     levels_of_interest = state_dict["levels_of_interest"]
@@ -870,6 +872,8 @@ if __name__ == "__main__":
             config = piece_config
         else:
             config = skill_config
+
+        # When training a probe, you have to set all parameters such as model name, dataset prefix, etc.
         dataset_prefix = "lichess_"
         # dataset_prefix = "stockfish_"
         layer = 12
