@@ -14,3 +14,4 @@ models/*
 linear_probes/*
 !linear_probes/saved_probes/
 !linear_probes/view_probe.ipynb
+!linear_probes/analyze_test_results.ipynb
