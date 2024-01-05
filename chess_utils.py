@@ -199,8 +199,6 @@ def state_stack_to_one_hot(
     for val in mapping:
         one_hot[..., mapping[val]] = state_stack == val
 
-    print(mapping)
-
     return one_hot
 
 
