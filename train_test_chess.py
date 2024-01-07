@@ -168,6 +168,9 @@ def process_dataframe(
     input_dataframe_file: str,
     config: Config,
 ) -> Optional[dict]:
+    """This is used if we want to have our model do classification on a subset of the Elo bins.
+    There are 6 Elo bins. If we want our model to classify between bin 0 and bin 5, we can use this function to
+    filter the DataFrame to only include games from these bins."""
     df = pd.read_csv(input_dataframe_file)
     df.to_csv(PROCESSING_DF_FILENAME, index=False)
     user_state_dict_one_hot_mapping = None
@@ -264,6 +267,7 @@ def train_linear_probe_cross_entropy(
     config: Config,
     misc_logging_dict: dict,
 ):
+    """Trains a linear probe on the train set, contained in probe_data."""
     assert misc_logging_dict["split"] == "train", "Don't train on the test set"
     # I use min because the probes seem to mostly converge within 25k games
     num_games = min(
@@ -499,6 +503,15 @@ def construct_linear_probe_data(
     model_name: str,
     config: Config,
 ) -> LinearProbeData:
+    """We need the following data to train or test a linear probe:
+    - The layer to probe in the GPT
+    - The GPT model in transformer_lens format
+    - The number of layers in the GPT
+    - board_seqs_int: the integer sequences representing the chess games, encoded using meta.pkl
+    - board_seqs_string: the string sequences representing the chess games
+    - custom_indices: the indices of the moves we want to probe on. By default, these are the indices of every "."
+    - skill_stack: the skill levels of the players in the games (only used if probing for skill)
+    """
     # Checking for foot guns
 
     if dataset_prefix == "lichess_":
@@ -568,6 +581,7 @@ def test_linear_probe_cross_entropy(
     config: Config,
     misc_logging_dict: dict,
 ):
+    """Takes a linear probe and tests it on the test set, contained in probe_data. Saves the results to a pickle file."""
     assert misc_logging_dict["split"] == "test", "Don't test on the train set"
 
     num_games = min(
@@ -820,6 +834,7 @@ if __name__ == "__main__":
 
         for probe_to_test in saved_probes:
             probe_file_location = f"{SAVED_PROBE_DIR}{probe_to_test}"
+            # We will populate all parameters using information in the probe state dict
             with open(probe_file_location, "rb") as f:
                 state_dict = torch.load(f, map_location=torch.device(device))
                 print(state_dict.keys())
