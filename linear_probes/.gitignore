@@ -1,0 +1,9 @@
+# Ignore everything in this directory
+*
+
+# But not these files/directories
+!/saved_probes/
+!/view_probe.ipynb
+!/analyze_test_results.ipynb
+!/test_data/
+!.gitignore
