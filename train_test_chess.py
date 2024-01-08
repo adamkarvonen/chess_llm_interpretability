@@ -810,6 +810,8 @@ RUN_TEST_SET = True  # If True, we will test the probes on the test set. If Fals
 USE_PIECE_BOARD_STATE = True  # We will test or train a probe for piece board state
 # If USE_PIECE_BOARD_STATE is False, we will test or train a probe on predicting player ELO
 
+# If training a probe, make sure to set the below parameters in the else block
+
 saved_piece_probe_name = "tf_lens_lichess_16layers_ckpt_no_optimizer_chess_piece_probe_layer_12_pos_start_0.pth"
 saved_skill_probe_name = (
     "tf_lens_lichess_16layers_ckpt_no_optimizer_chess_skill_probe_layer_12.pth"
@@ -896,7 +898,7 @@ if __name__ == "__main__":
         n_layers = 16
         model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
         # model_name = "tf_lens_lichess_16layers_ckpt_no_optimizer"
-        # config.levels_of_interest = [0, 5]
+        # config.levels_of_interest = [0, 5] # NOTE: If training for skill, you should uncomment this line for good results
         input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
         config = set_config_min_max_vals_and_column_name(
             config, input_dataframe_file, dataset_prefix
