@@ -8,3 +8,4 @@ numpy == 1.26.0
 python-chess == 1.999
 pandas == 2.1.1
 plotly == 5.18.0
+matplotlib == 3.8.0
