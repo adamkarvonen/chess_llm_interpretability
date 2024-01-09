@@ -1,5 +1,5 @@
 # chess_llm_interpretability
-This evaluates LLMs trained on PGN format chess games and evaluates board understand, similar to the Othello World paper.
+This evaluates LLMs trained on PGN format chess games and evaluates board understanding, similar to the Othello World paper.
 
 This repo can train, evaluate, and visualize linear probes on LLMs that have been trained to play chess with PGN strings. For example, we can visualize where the model "thinks" the white pawns are. On the left, we have the actual white pawn location. In the middle, we clip the probe outputs to turn the heatmap into a more binary visualization. On the right, we have the full gradient of model beliefs, and we can see it's extremely confident that no white pawns are on either side's back rank.
 
