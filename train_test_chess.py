@@ -24,16 +24,23 @@ import chess_utils
 debug_mode = False
 info_mode = True
 
-if debug_mode:
-    log_level = logging.DEBUG
-elif info_mode:
-    log_level = logging.INFO
-else:
-    log_level = logging.WARNING
-
-# Configure logging
-logging.basicConfig(level=log_level)
 logger = logging.getLogger(__name__)
+
+if debug_mode:
+    logger.setLevel(logging.DEBUG)
+elif info_mode:
+    logger.setLevel(logging.INFO)
+else:
+    logger.setLevel(logging.WARNING)
+
+# Add handler to this logger if not already present
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 # %%
 MODEL_DIR = "models/"
