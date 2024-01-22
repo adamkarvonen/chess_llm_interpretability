@@ -37,7 +37,7 @@ logging.basicConfig(level=log_level)
 logger = logging.getLogger(__name__)
 
 batch_size = 1
-MAXIMUM_TESTING_GAMES = 1000
+MAXIMUM_TESTING_GAMES = 2000
 modes = 1
 
 
@@ -199,15 +199,20 @@ def create_contrastive_activations(
 
     average_high_elo_activation = sum_high_elo / count_high_elo
     average_low_elo_activation = sum_low_elo / count_low_elo
+
+    difference_vector = average_high_elo_activation - average_low_elo_activation
+
     state = {
         "average_high_elo_activation": average_high_elo_activation,
         "average_low_elo_activation": average_low_elo_activation,
+        "difference_vector": difference_vector,
         "metadata": {
             "description": "Average vectors for high and low Elo chess games",
             "count_high_elo": count_high_elo,
             "count_low_elo": count_low_elo,
         },
     }
+    state.update(logging_dict)
 
     output_probe_data_name = activation_name.split("/")[-1].split(".")[0]
     output_location = f"{CAA_DIR}{output_probe_data_name}.pt"
@@ -238,7 +243,7 @@ config = train_test_chess.skill_config
 # When training a probe, you have to set all parameters such as model name, dataset prefix, etc.
 dataset_prefix = "lichess_"
 # dataset_prefix = "stockfish_"
-layer = 14
+layer = 12
 split = "train"
 n_layers = 16
 model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
