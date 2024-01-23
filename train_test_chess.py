@@ -67,7 +67,8 @@ os.environ["WANDB_MODE"] = "online"
 # Training parameters
 batch_size = 5
 num_epochs = batch_size
-modes = 1
+modes = 1  # This variable currently doesn't do anything, but it is used and adds a dimension to the tensors
+# In the future, modes could be used to do clever things like training multiple probes at once, such as a black piece probe and a white piece probe
 wd = 0.01
 max_lr = 3e-4
 min_lr = max_lr / 10
