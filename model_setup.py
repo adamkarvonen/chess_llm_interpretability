@@ -183,6 +183,11 @@ sample_output = torch.tensor([[6, 4, 27, 9, 0, 27, 10, 0, 7, 4, 19, 28]])
 model_output = model(sample_input).argmax(dim=-1)
 print(model_output)
 print(sample_output == model_output)
+
+# For this particular sample_input, any model with decent chess skill should output sample_output.
+# So, this assert will definitely fail for a randomly initialized model, and may fail for models with low skill.
+# But, I've never seen that happen, so I'm keeping it simple for now. For a more robust test, use the nanogpt_to_transformer_lens.ipynb notebook.
+# This notebook actually runs the sample input through the original nanogpt model, and then through the converted transformer lens model.
 assert torch.all(sample_output == model_output)
 
 ### END MODEL SETUP ###
