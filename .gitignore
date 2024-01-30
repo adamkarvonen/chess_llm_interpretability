@@ -10,3 +10,5 @@ data/*
 models/*
 !models/meta.pkl
 !models/view_model.ipynb
+
+contrastive_activations/*
