@@ -571,7 +571,7 @@ def set_config_min_max_vals_and_column_name(
     if config.levels_of_interest is not None or config.probing_for_skill:
         if dataset_prefix == "stockfish_":
             config.column_name = "player_two"
-        elif dataset_prefix == "lichess_":
+        elif "lichess_" in dataset_prefix:
             config.column_name = "WhiteEloBinIndex"
     else:
         return config
