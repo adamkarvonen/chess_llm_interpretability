@@ -206,6 +206,8 @@ def one_hot_to_state_stack(one_hot: torch.Tensor, min_val: int) -> np.ndarray:
     """Input shape: assert(probe_out.shape) == (modes, sample_size, num_white_moves, rows, cols, one_hot_range)
     Output shape: assert(state_stacks_probe_outputs.shape) == (modes, sample_size, num_white_moves, rows, cols)
     """
+    if one_hot.is_cuda:
+        one_hot = one_hot.cpu()
     indices = torch.argmax(one_hot, dim=-1)
     state_stack = indices.numpy() + min_val
     return state_stack
