@@ -5,15 +5,11 @@ import torch
 from tqdm import tqdm
 import numpy as np
 from fancy_einsum import einsum
-import chess
 import numpy as np
-import csv
 from dataclasses import dataclass
-from torch.nn import MSELoss, L1Loss
 import pandas as pd
-import pickle
-import os
 import logging
+import itertools
 
 import chess_utils
 import train_test_chess
@@ -38,7 +34,6 @@ logger = logging.getLogger(__name__)
 
 batch_size = 1
 MAXIMUM_TESTING_GAMES = 2000
-modes = 1
 
 
 def check_tensor_values(tensor, tensor_name="Tensor"):
@@ -172,10 +167,10 @@ def create_contrastive_activations(
             # logger.debug(summed_resid_post[0, :2])
 
             for batch_idx in range(batch_size):
-                if games_skill[batch_idx] == 5:
+                if games_skill[batch_idx] == config.levels_of_interest[1]:
                     sum_high_elo += summed_resid_post[batch_idx]
                     count_high_elo += 1
-                elif games_skill[batch_idx] == 0:
+                elif games_skill[batch_idx] == config.levels_of_interest[0]:
                     sum_low_elo += summed_resid_post[batch_idx]
                     count_low_elo += 1
                 else:
@@ -223,10 +218,7 @@ def create_contrastive_activations(
 
 MODEL_DIR = "models/"
 DATA_DIR = "data/"
-PROBE_DIR = "linear_probes/"
 CAA_DIR = "contrastive_activations/"
-SAVED_PROBE_DIR = "linear_probes/saved_probes/"
-SPLIT = "test"
 
 device = (
     "cuda"
@@ -235,44 +227,56 @@ device = (
     if torch.backends.mps.is_available()
     else "cpu"
 )
-# device = "cpu"
 logger.info(f"Using device: {device}")
 
 config = train_test_chess.skill_config
 
-# When training a probe, you have to set all parameters such as model name, dataset prefix, etc.
-dataset_prefix = "lichess_"
-# dataset_prefix = "stockfish_"
-layer = 12
-split = "train"
-n_layers = 16
-model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
-config.levels_of_interest = [0, 5]
-input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-config = train_test_chess.set_config_min_max_vals_and_column_name(
-    config, input_dataframe_file, dataset_prefix
-)
-config.pos_start = 25
+# Sweep over layers, levels of interest, pos_start, and dataset_prefix
 
-misc_logging_dict = {
-    "split": split,
-    "dataset_prefix": dataset_prefix,
-    "model_name": model_name,
-    "n_layers": n_layers,
-}
-
-probe_data = train_test_chess.construct_linear_probe_data(
-    input_dataframe_file,
-    layer,
-    dataset_prefix,
-    split,
-    n_layers,
-    model_name,
-    config,
-)
+layers = range(11, 16, 1)
+levels_of_interest = [[1, 4]]
+pos_starts = [25]
+dataset_prefixes = [
+    "lichess_",
+]
 
 
-activation_name = (
-    f"{dataset_prefix}{split}_layer_{layer}_pos_start_{config.pos_start}_activations"
-)
-create_contrastive_activations(activation_name, probe_data, config, misc_logging_dict)
+for layer, level, pos_start, dataset_prefix in itertools.product(
+    layers, levels_of_interest, pos_starts, dataset_prefixes
+):
+    dataset_prefix = dataset_prefix
+    layer = layer
+    split = "train"
+    n_layers = 16
+    model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
+    config.levels_of_interest = level
+    input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
+    config = train_test_chess.set_config_min_max_vals_and_column_name(
+        config, input_dataframe_file, dataset_prefix
+    )
+    config.pos_start = pos_start
+
+    misc_logging_dict = {
+        "split": split,
+        "dataset_prefix": dataset_prefix,
+        "model_name": model_name,
+        "n_layers": n_layers,
+    }
+
+    probe_data = train_test_chess.construct_linear_probe_data(
+        input_dataframe_file,
+        layer,
+        dataset_prefix,
+        split,
+        n_layers,
+        model_name,
+        config,
+    )
+
+    levels_str = [str(i) for i in level]
+    levels_str = "".join(levels_str)
+
+    activation_name = f"{dataset_prefix}{split}_layer_{layer}_pos_start_{config.pos_start}_levels_{levels_str}_activations_{MAXIMUM_TESTING_GAMES}_moves"
+    create_contrastive_activations(
+        activation_name, probe_data, config, misc_logging_dict
+    )
