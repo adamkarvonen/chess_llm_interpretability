@@ -15,9 +15,14 @@ PIECE_TO_INT = {
     chess.KING: 6,
 }
 
+INT_TO_PIECE = {value: key for key, value in PIECE_TO_INT.items()}
+
 
 def pretty_print_state_stack(state: np.ndarray) -> None:
-    """Given a state stack, print each state in a readable format."""
+    """Given a state stack, print each state in a readable format.
+    The problem is that chess boards row 0 begin at the bottom, while in state stack (and any array in general),
+    row 0 begins at the top. This is why we reverse the state stack before printing it.
+    """
     piece_symbols = {1: "W", -1: "B", 0: "."}
 
     # Print the rows in reverse order
@@ -83,6 +88,20 @@ def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> np.
             state[i // 8, i % 8] = piece_value
 
     return state
+
+
+def state_stack_to_chess_board(state: torch.Tensor) -> chess.Board:
+    """Given a state stack, return a chess.Board object."""
+    board = chess.Board(fen=None)
+    for row_idx, row in enumerate(state):
+        for col_idx, piece in enumerate(row):
+            if piece != 0:
+                piece_type = abs(piece)
+                color = chess.WHITE if piece > 0 else chess.BLACK
+                board.set_piece_at(
+                    chess.square(col_idx, row_idx), chess.Piece(piece_type, color)
+                )
+    return board
 
 
 def create_state_stack(
@@ -211,6 +230,12 @@ def one_hot_to_state_stack(one_hot: torch.Tensor, min_val: int) -> np.ndarray:
     indices = torch.argmax(one_hot, dim=-1)
     state_stack = indices.numpy() + min_val
     return state_stack
+
+
+def square_to_coordinate(square: chess.Square) -> tuple[int, int]:
+    row = chess.square_rank(square)
+    column = chess.square_file(square)
+    return (row, column)
 
 
 def find_dots_indices(moves_string: str) -> list[int]:
