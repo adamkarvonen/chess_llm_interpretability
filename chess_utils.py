@@ -16,6 +16,21 @@ PIECE_TO_INT = {
 }
 
 INT_TO_PIECE = {value: key for key, value in PIECE_TO_INT.items()}
+PIECE_TO_ONE_HOT_MAPPING = {
+    -6: 0,
+    -5: 1,
+    -4: 2,
+    -3: 3,
+    -2: 4,
+    -1: 5,
+    0: 6,
+    1: 7,
+    2: 8,
+    3: 9,
+    4: 10,
+    5: 11,
+    6: 12,
+}
 
 
 def pretty_print_state_stack(state: np.ndarray) -> None:
@@ -319,17 +334,33 @@ def find_custom_indices(
     return indices
 
 
-def encode_string(s: str) -> list[int]:
+def encode_string(meta: dict, s: str) -> list[int]:
     """Encode a string into a list of integers."""
-    with open("meta.pkl", "rb") as f:
-        meta = pickle.load(f)
+    # This is how you get meta
+    # with open("meta.pkl", "rb") as f:
+    #     meta = pickle.load(f)
     stoi = meta["stoi"]
     return [stoi[c] for c in s]
 
 
-def decode_list(l: list[int]) -> str:
+def decode_list(meta: dict, l: list[int]) -> str:
     """Decode a list of integers into a string."""
-    with open("meta.pkl", "rb") as f:
-        meta = pickle.load(f)
+    # with open("meta.pkl", "rb") as f:
+    #     meta = pickle.load(f)
     itos = meta["itos"]
     return "".join([itos[i] for i in l])
+
+
+def get_model_move(
+    model, meta: dict, idx: torch.Tensor, max_new_tokens: int = 10
+) -> str:
+    """Get the move predicted by the model."""
+    input_length = len(idx[0])
+    for _ in range(max_new_tokens):
+        model_output = model(idx).argmax(dim=-1)
+        idx_next = model_output[:, -1:]
+        idx = torch.cat((idx, idx_next), dim=1)
+    model_response = idx[:, input_length:]
+    model_response_str = decode_list(meta, model_response[0].tolist())
+    model_move = model_response_str.split(" ")[0]
+    return model_move
