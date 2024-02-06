@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 MODEL_DIR = "models/"
 DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
-SAVED_PROBE_DIR = "linear_probes/saved_probes/"
+SAVED_PROBE_DIR = "linear_probes/8layer_piece_probe_sweep/"
 SPLIT = "test"
 MODES = 1  # Currently only supporting 1 mode so this is fairly unnecessary
 START_POS = 5
@@ -102,7 +102,7 @@ def get_probe_data(probe_name: str) -> train_test_chess.LinearProbeData:
 def perform_board_interventions(
     probe_name: str,
     probe_data: train_test_chess.LinearProbeData,
-    sample_size: int = 1000,
+    sample_size: int = 100,
 ):
     probe_file_location = f"{SAVED_PROBE_DIR}{probe_name}"
     checkpoint = torch.load(probe_file_location, map_location=torch.device(device))
@@ -166,16 +166,17 @@ def perform_board_interventions(
     hook_name = f"blocks.{probe_data.layer}.hook_resid_post"
 
     total_moves_counter = 0
+    possible_moves_counter = 0
     initial_legal_moves_counter = 0
     legal_intervention_moves_counter = 0
 
     for sample_index in range(sample_size):
         print(
-            f"Sample index: {sample_index}, total moves: {total_moves_counter}, initial legal moves: {initial_legal_moves_counter}, legal intervention moves: {legal_intervention_moves_counter}"
+            f"Sample index: {sample_index}, total moves: {total_moves_counter}, possible moves: {possible_moves_counter}, initial legal moves: {initial_legal_moves_counter}, legal intervention moves: {legal_intervention_moves_counter}"
         )
         for move_of_interest in range(START_POS, END_POS):
             print(
-                f"Sample index: {sample_index}, total moves: {total_moves_counter}, initial legal moves: {initial_legal_moves_counter}, legal intervention moves: {legal_intervention_moves_counter}"
+                f"Sample index: {sample_index}, total moves: {total_moves_counter}, possible moves: {possible_moves_counter}, initial legal moves: {initial_legal_moves_counter}, legal intervention moves: {legal_intervention_moves_counter}"
             )
             total_moves_counter += 1
 
@@ -212,6 +213,10 @@ def perform_board_interventions(
             ]
             r, c = chess_utils.square_to_coordinate(model_move_san.from_square)
 
+            if moved_piece.piece_type == chess.KING:
+                continue
+            possible_moves_counter += 1
+
             # Step 5: Make a modified state_stack and board where source square is now empty
             modified_state_stack = state_stacks_all_chars[
                 :, sample_index : sample_index + 1, :, :, :
@@ -224,6 +229,12 @@ def perform_board_interventions(
                 modified_move_of_interest_state
             )
 
+            if any(move for move in board.legal_moves) == False:
+                print("No legal moves")
+                total_moves_counter -= 1
+                initial_legal_moves_counter -= 1
+                continue
+
             # Step 6: Obtain a vector to flip the square to blank in the model's activations at a given layer
             piece1 = BLANK_INDEX
             piece2 = moved_piece_probe_index
@@ -233,12 +244,15 @@ def perform_board_interventions(
             flip_dir.to(device)
 
             def flip_hook(resid, hook):
-                # coeff = resid[0, pos] @ flip_dir/flip_dir.norm()
+                coeff = resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
                 # if coeff.item() > 0:
-                # resid[0, :] -= (scale+1) * coeff * flip_dir/flip_dir.norm()
-                resid[:, :] -= (
-                    flip_dir * 0.15
-                )  # NOTE: We could only intervene on a single position in the sequence, but there's no harm in intervening on all of them
+                # coeff = 1
+                # print(f"coeff: {coeff}")
+                coeff = min(5, (1 / abs(coeff.item())))
+                resid[0,] -= (1.0) * coeff * flip_dir / flip_dir.norm()
+                # resid[0, :] -= (
+                #     flip_dir * 0.2
+                # )  # NOTE: We could only intervene on a single position in the sequence, but there's no harm in intervening on all of them
 
             # Step 7: Intervene on the model's activations and get the model move under the modified board state
             probe_data.model.reset_hooks()
@@ -253,6 +267,18 @@ def perform_board_interventions(
                     modified_board_model_move
                 )
             except:
+                print(board)
+                print("_" * 50)
+                print(modified_board)
+                print(
+                    f"Model move: {model_move}, Modified model move: {modified_board_model_move}"
+                )
+                print(
+                    f"Model move: {model_move_san}, Modified model move: {modified_board_model_move_san}"
+                )
+                print(
+                    f"Move of interest index: {move_of_interest_index}, r: {r}, c: {c}, Piece: {moved_piece}"
+                )
                 continue
 
             # Step 8: Check if the model move under the modified board state is legal
@@ -260,6 +286,6 @@ def perform_board_interventions(
                 legal_intervention_moves_counter += 1
 
 
-probe_name = "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_5.pth"
+probe_name = "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_4.pth"
 probe_data = get_probe_data(probe_name)
-perform_board_interventions(probe_name, probe_data, sample_size=1000)
+perform_board_interventions(probe_name, probe_data)
