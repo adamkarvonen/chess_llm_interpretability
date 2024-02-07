@@ -106,7 +106,9 @@ def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> np.
 
 
 def state_stack_to_chess_board(state: torch.Tensor) -> chess.Board:
-    """Given a state stack, return a chess.Board object."""
+    """Given a state stack, return a chess.Board object.
+    WARNING: The board will not include any information about whose turn it is, castling rights, en passant, etc.
+    For this reason, pgn_string_to_board is preferred."""
     board = chess.Board(fen=None)
     for row_idx, row in enumerate(state):
         for col_idx, piece in enumerate(row):
@@ -116,6 +118,20 @@ def state_stack_to_chess_board(state: torch.Tensor) -> chess.Board:
                 board.set_piece_at(
                     chess.square(col_idx, row_idx), chess.Piece(piece_type, color)
                 )
+    return board
+
+
+def pgn_string_to_board(pgn_string: str) -> chess.Board:
+    """Convert a PGN string to a chess.Board object.
+    We are making an assumption that the PGN string is in this format:
+    ;1.e4 e5 2. or ;1.e4 e5 2.Nf3"""
+    board = chess.Board()
+    for move in pgn_string.split():
+        if "." in move:
+            move = move.split(".")[1]
+        if move == "":
+            continue
+        board.push_san(move)
     return board
 
 
