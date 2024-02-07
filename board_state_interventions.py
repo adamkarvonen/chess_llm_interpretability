@@ -15,6 +15,7 @@ import pickle
 import os
 import logging
 import plotly.graph_objects as go
+from functools import partial
 
 import chess_utils
 import train_test_chess
@@ -100,15 +101,20 @@ def get_probe_data(probe_name: str) -> train_test_chess.LinearProbeData:
 
 
 def perform_board_interventions(
-    probe_name: str,
+    probe_names: dict[int, str],
     probe_data: train_test_chess.LinearProbeData,
     sample_size: int = 100,
 ):
-    probe_file_location = f"{SAVED_PROBE_DIR}{probe_name}"
-    checkpoint = torch.load(probe_file_location, map_location=torch.device(device))
-    linear_probe = checkpoint["linear_probe"]
 
-    config = train_test_chess.find_config_by_name(checkpoint["config_name"])
+    probes = {}
+    checkpoint = None  # Going to retain the last checkpoint for the config
+
+    for layer, probe_name in probe_names.items():
+        probe_file_location = f"{SAVED_PROBE_DIR}{probe_name}"
+        checkpoint = torch.load(probe_file_location, map_location=torch.device(device))
+        linear_probe = checkpoint["linear_probe"]
+        probes[layer] = linear_probe
+        config = train_test_chess.find_config_by_name(checkpoint["config_name"])
 
     state_stacks_all_chars = chess_utils.create_state_stacks(
         probe_data.board_seqs_string[:sample_size], config.custom_board_state_function
@@ -150,20 +156,7 @@ def perform_board_interventions(
     print(state_stack_white_moves.shape)
     print(state_stacks_all_chars.shape)
 
-    one_hot_range = config.max_val - config.min_val + 1
     board_seqs_int = probe_data.board_seqs_int[:sample_size].to(device)
-
-    state_stacks_one_hot = chess_utils.state_stack_to_one_hot(
-        MODES,
-        config.num_rows,
-        config.num_cols,
-        config.min_val,
-        config.max_val,
-        device,
-        state_stacks_all_chars,
-    )
-
-    hook_name = f"blocks.{probe_data.layer}.hook_resid_post"
 
     total_moves_counter = 0
     possible_moves_counter = 0
@@ -236,27 +229,35 @@ def perform_board_interventions(
                 continue
 
             # Step 6: Obtain a vector to flip the square to blank in the model's activations at a given layer
+
+            flip_dirs = {}
+
             piece1 = BLANK_INDEX
             piece2 = moved_piece_probe_index
-            piece1_probe = linear_probe[:, :, r, c, piece1].squeeze()
-            piece2_probe = linear_probe[:, :, r, c, piece2].squeeze()
-            flip_dir = piece2_probe - piece1_probe
-            flip_dir.to(device)
 
-            def flip_hook(resid, hook):
+            for layer, linear_probe in probes.items():
+                piece1_probe = linear_probe[:, :, r, c, piece1].squeeze()
+                piece2_probe = linear_probe[:, :, r, c, piece2].squeeze()
+                flip_dir = piece2_probe - piece1_probe
+                flip_dir.to(device)
+                flip_dirs[layer] = flip_dir
+
+            def flip_hook(resid, hook, flip_dir: torch.Tensor):
                 coeff = resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
                 # if coeff.item() > 0:
                 # coeff = 1
                 # print(f"coeff: {coeff}")
-                coeff = min(5, (1 / abs(coeff.item())))
-                resid[0,] -= (1.0) * coeff * flip_dir / flip_dir.norm()
-                # resid[0, :] -= (
-                #     flip_dir * 0.2
-                # )  # NOTE: We could only intervene on a single position in the sequence, but there's no harm in intervening on all of them
+                coeff = min(8, (1 / abs(coeff.item())))
+                resid[0, :] -= (0.5) * coeff * flip_dir / flip_dir.norm()
+                # resid[0, :] -= flip_dir * 0.06
+                # NOTE: We could only intervene on a single position in the sequence, but there's no harm in intervening on all of them
 
             # Step 7: Intervene on the model's activations and get the model move under the modified board state
             probe_data.model.reset_hooks()
-            probe_data.model.add_hook(hook_name, flip_hook)
+            for layer, flip_dir in flip_dirs.items():
+                temp_hook_fn = partial(flip_hook, flip_dir=flip_dir)
+                hook_name = f"blocks.{layer}.hook_resid_post"
+                probe_data.model.add_hook(hook_name, temp_hook_fn)
             modified_board_model_move = chess_utils.get_model_move(
                 probe_data.model, META, model_input
             )
@@ -274,9 +275,6 @@ def perform_board_interventions(
                     f"Model move: {model_move}, Modified model move: {modified_board_model_move}"
                 )
                 print(
-                    f"Model move: {model_move_san}, Modified model move: {modified_board_model_move_san}"
-                )
-                print(
                     f"Move of interest index: {move_of_interest_index}, r: {r}, c: {c}, Piece: {moved_piece}"
                 )
                 continue
@@ -286,6 +284,11 @@ def perform_board_interventions(
                 legal_intervention_moves_counter += 1
 
 
-probe_name = "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_4.pth"
-probe_data = get_probe_data(probe_name)
-perform_board_interventions(probe_name, probe_data)
+probe_names = {}
+first_layer = 3
+for i in range(first_layer, 6):
+    probe_names[i] = (
+        f"tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_{i}.pth"
+    )
+probe_data = get_probe_data(probe_names[first_layer])
+perform_board_interventions(probe_names, probe_data)
