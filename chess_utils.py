@@ -372,11 +372,13 @@ def get_model_move(
 ) -> str:
     """Get the move predicted by the model."""
     input_length = len(idx[0])
+    space_idx = encode_string(meta, " ")[0]
     for _ in range(max_new_tokens):
         model_output = model(idx).argmax(dim=-1)
         idx_next = model_output[:, -1:]
+        if idx_next[0] == space_idx:
+            break
         idx = torch.cat((idx, idx_next), dim=1)
     model_response = idx[:, input_length:]
-    model_response_str = decode_list(meta, model_response[0].tolist())
-    model_move = model_response_str.split(" ")[0]
+    model_move = decode_list(meta, model_response[0].tolist())
     return model_move
