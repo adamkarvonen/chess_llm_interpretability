@@ -31,6 +31,9 @@ PIECE_TO_ONE_HOT_MAPPING = {
     5: 11,
     6: 12,
 }
+ONE_HOT_TO_PIECE_MAPPING = {
+    value: key for key, value in PIECE_TO_ONE_HOT_MAPPING.items()
+}
 
 
 def pretty_print_state_stack(state: np.ndarray) -> None:
