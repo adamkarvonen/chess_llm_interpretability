@@ -3,7 +3,9 @@ import numpy as np
 import pandas as pd
 import pickle
 import torch
+from torch.nn import functional as F
 from typing import Callable, Optional
+
 
 # Mapping of chess pieces to integers
 PIECE_TO_INT = {
@@ -370,18 +372,48 @@ def decode_list(meta: dict, l: list[int]) -> str:
     return "".join([itos[i] for i in l])
 
 
+# Adapted from nanogpt
+@torch.no_grad()
 def get_model_move(
-    model, meta: dict, idx: torch.Tensor, max_new_tokens: int = 10
-) -> str:
-    """Get the move predicted by the model."""
+    model,
+    meta: dict,
+    idx: torch.Tensor,
+    max_new_tokens: int = 10,
+    temperature=1.0,
+    block_size=1023,
+):
+    """Generate new tokens from a trained language model. If temperature is 0.0, greedy decoding is used.
+    Otherwise, standard temperature based sampling is used."""
+
+    if temperature < 0:
+        raise ValueError("temperature has to be non-negative")
+
     input_length = len(idx[0])
     space_idx = encode_string(meta, " ")[0]
     for _ in range(max_new_tokens):
-        model_output = model(idx).argmax(dim=-1)
-        idx_next = model_output[:, -1:]
+        # if the sequence context is growing too long we must crop it at block_size
+        idx_cond = idx if idx.size(1) <= block_size else idx[:, -block_size:]
+        if temperature == 0.0:
+            # greedy decoding
+            # model(idx_cond) is a tensor of shape (batch_size, sequence_length, vocab_size)
+            # logits is a tensor of shape (batch_size, vocab_size)
+            # idx_next is a tensor of shape (batch_size, 1)
+            logits = model(idx_cond)[:, -1, :]
+            idx_next = torch.argmax(logits, dim=-1).unsqueeze(-1)
+        else:
+            # forward the model to get the logits for the index in the sequence
+            logits = model(idx_cond)
+            # pluck the logits at the final step and scale by desired temperature
+            logits = logits[:, -1, :] / temperature
+            # apply softmax to convert logits to (normalized) probabilities
+            probs = F.softmax(logits, dim=-1)
+            # sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)
         if idx_next[0] == space_idx:
             break
+        # append sampled index to the running sequence and continue
         idx = torch.cat((idx, idx_next), dim=1)
+
     model_response = idx[:, input_length:]
     model_move = decode_list(meta, model_response[0].tolist())
     return model_move
