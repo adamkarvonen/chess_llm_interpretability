@@ -12,3 +12,4 @@ models/*
 !models/view_model.ipynb
 
 contrastive_activations/*
+intervention_logs/*
