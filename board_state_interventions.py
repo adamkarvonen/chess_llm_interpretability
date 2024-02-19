@@ -299,6 +299,10 @@ def average_probe_empty_cell_value(
     return average_cell_values
 
 
+# This is a 300 line function, which I'm not thrilled about. However, every sequential step is only used once in this function.
+# I made an initial attempt to break it up into smaller functions, but I found that it made the code harder to follow.
+# I also have limited time to refactor this function, so I'm leaving it as is for now.
+# There is a lot going on here, but it's all necessary.
 def perform_board_interventions(
     probe_names: dict[int, str],
     probe_data: train_test_chess.LinearProbeData,
@@ -309,7 +313,6 @@ def perform_board_interventions(
     track_outputs: bool = False,
     scales: list[float] = [0.1],
 ):
-
     probes, state_stacks_all_chars, white_move_indices = prepare_intervention_data(
         probe_names, probe_data, sample_size
     )
@@ -420,6 +423,7 @@ def perform_board_interventions(
             legal_deterministic_moves_per_scale_per_move = {}
             legal_sampled_moves_per_scale_per_move = {}
             for scale in scales:
+                print(f"Scale: {scale}")
                 legal_sampled_moves_per_scale_per_move[scale] = 0
                 legal_deterministic_moves_per_scale_per_move[scale] = 0
 
@@ -593,6 +597,7 @@ def perform_board_interventions(
                 legal_deterministic_moves_per_scale_per_move.values()
             )
 
+    # After intervening on all moves in all games, save output_tracker and move_counters to disk
     if track_outputs:
         file_path = "output_tracker.pkl"
         with open(file_path, "wb") as file:
