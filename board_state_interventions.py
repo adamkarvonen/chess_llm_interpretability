@@ -76,10 +76,15 @@ class MoveCounters:
     total_moves: int = 0
     possible_moves: int = 0
     original_board_deterministic_legal_moves: int = 0
-    original_model_original_board_sampled_legal_moves: int = 0
-    original_model_modified_board_sampled_legal_moves: int = 0
+    original_model_original_board_sampled_legal_moves_total: int = 0
+    original_model_original_board_sampled_legal_moves_unique: int = 0
+    original_model_modified_board_sampled_legal_moves_total: int = 0
+    original_model_modified_board_sampled_legal_moves_unique: int = 0
     modified_board_deterministic_legal_moves: int = 0
-    modified_model_modified_board_sampled_legal_moves: int = 0
+    modified_model_modified_board_sampled_legal_moves_total: int = 0
+    modified_model_modified_board_sampled_legal_moves_unique: int = 0
+    original_model_unique_moves: int = 0
+    modified_model_unique_moves: int = 0
 
 
 def get_probe_data(probe_name: str) -> train_test_chess.LinearProbeData:
@@ -319,12 +324,14 @@ def perform_board_interventions(
 
     move_counters = MoveCounters()
 
-    # Scale tracker stores the number of successful interventions for each scale
-    deterministic_scale_tracker = {}
-    sampled_scale_tracker = {}
+    scale_tracker = {}
     for scale in scales:
-        deterministic_scale_tracker[scale] = 0
-        sampled_scale_tracker[scale] = 0
+        scale_tracker[scale] = {
+            "deterministic": 0,
+            "sampled_legal_total": 0,
+            "sampled_legal_unique": 0,
+            "unique": 0,
+        }
 
     # Output tracker stores metadata and the original and modified probe outputs for the entire board per move per game for each layer
     # The results can be analyzed in probe_output_data_exploration.ipynb
@@ -338,7 +345,7 @@ def perform_board_interventions(
     for sample_index in range(sample_size):
         for scale in scales:
             print(
-                f"Scale: {scale}, deterministic count: {deterministic_scale_tracker[scale]}, sampled count: {sampled_scale_tracker[scale]}"
+                f"Scale: {scale}, deterministic count: {scale_tracker[scale]['deterministic']}, sampled count: {scale_tracker[scale]['sampled_legal_total']}"
             )
 
         for move_of_interest in range(START_POS, END_POS):
@@ -394,6 +401,7 @@ def perform_board_interventions(
 
             # Step 5.1: Sample n moves from the unmodified model
             # Track how many moves were legal on both the original and modified boards
+            unique_moves = set()
             for _ in range(SAMPLING_MOVES):
                 if sampling_type == SamplingType.DETERMINISTIC_ONLY:
                     break
@@ -403,29 +411,45 @@ def perform_board_interventions(
                 try:
                     board.parse_san(sampled_model_move)
                     print(f"Model original move: {sampled_model_move}")
-                    move_counters.original_model_original_board_sampled_legal_moves += 1
+                    move_counters.original_model_original_board_sampled_legal_moves_total += (
+                        1
+                    )
+                    if sampled_model_move not in unique_moves:
+                        move_counters.original_model_original_board_sampled_legal_moves_unique += (
+                            1
+                        )
                 except:
                     print(f"Invalid original move: {sampled_model_move}")
                     pass
                 try:
                     modified_board.parse_san(sampled_model_move)
                     print(f"Model modified move: {sampled_model_move}")
-                    move_counters.original_model_modified_board_sampled_legal_moves += 1
+                    move_counters.original_model_modified_board_sampled_legal_moves_total += (
+                        1
+                    )
+                    if sampled_model_move not in unique_moves:
+                        move_counters.original_model_modified_board_sampled_legal_moves_unique += (
+                            1
+                        )
                 except:
                     print(f"Invalid modified move: {sampled_model_move}")
                     pass
+                unique_moves.add(sampled_model_move)
+            move_counters.original_model_unique_moves += len(unique_moves)
 
             # If we are targetting probe output values, collect the average probe output values. Also, optionally track the outputs for each layer
             _, cache = probe_data.model.run_with_cache(model_input)
 
             # Initialize some legal move trackers. Note that these get reset every move. Add the end of the move,
             # we find the maximum value of these trackers to get the maximum possible legal moves for each move
-            legal_deterministic_moves_per_scale_per_move = {}
-            legal_sampled_moves_per_scale_per_move = {}
+            per_move_scale_tracker = {}
             for scale in scales:
                 print(f"Scale: {scale}")
-                legal_sampled_moves_per_scale_per_move[scale] = 0
-                legal_deterministic_moves_per_scale_per_move[scale] = 0
+                per_move_scale_tracker[scale] = {
+                    "deterministic": 0,
+                    "sampled_legal_total": 0,
+                    "sampled_legal_unique": 0,
+                }
 
                 # Step 5.2: Calculate the average probe output values for non-blank and non-moved piece cells
                 # Note that these are only used for the AVERAGE_TARGET intervention type
@@ -525,6 +549,7 @@ def perform_board_interventions(
                 # Step 6.1: Sample n moves from the modified model
                 # Track how many moves were legal on the modified board
                 # Note that we are tracking this for each scale
+                unique_moves = set()
                 for _ in range(SAMPLING_MOVES):
                     if sampling_type == SamplingType.DETERMINISTIC_ONLY:
                         break
@@ -534,10 +559,14 @@ def perform_board_interventions(
                     try:
                         modified_board.parse_san(sampled_model_move)
                         print(f"Model modified sampled move: {sampled_model_move}")
-                        legal_sampled_moves_per_scale_per_move[scale] += 1
+                        per_move_scale_tracker[scale]["sampled_legal_total"] += 1
+                        if sampled_model_move not in unique_moves:
+                            per_move_scale_tracker[scale]["sampled_legal_unique"] += 1
                     except:
                         print(f"Invalid modified sampled move: {sampled_model_move}")
                         pass
+                    unique_moves.add(sampled_model_move)
+                scale_tracker[scale]["unique"] += len(unique_moves)
 
                 _, modified_cache = probe_data.model.run_with_cache(model_input)
                 probe_data.model.reset_hooks()
@@ -584,17 +613,30 @@ def perform_board_interventions(
                 if track_outputs:
                     for layer in output_tracker:
                         output_tracker[layer]["successes"][-1] = True
-                legal_deterministic_moves_per_scale_per_move[scale] = 1
-                deterministic_scale_tracker[scale] += 1
-                sampled_scale_tracker[scale] += legal_sampled_moves_per_scale_per_move[
+                per_move_scale_tracker[scale]["deterministic"] = 1
+                scale_tracker[scale]["deterministic"] += 1
+                scale_tracker[scale]["sampled_legal_total"] += per_move_scale_tracker[
                     scale
-                ]
+                ]["sampled_legal_total"]
+                scale_tracker[scale]["sampled_legal_unique"] += per_move_scale_tracker[
+                    scale
+                ]["sampled_legal_unique"]
 
-            move_counters.modified_model_modified_board_sampled_legal_moves += max(
-                legal_sampled_moves_per_scale_per_move.values()
+            move_counters.modified_model_modified_board_sampled_legal_moves_total += (
+                max(
+                    per_move_scale_tracker[scale]["sampled_legal_total"]
+                    for scale in scale_tracker
+                )
+            )
+            move_counters.modified_model_modified_board_sampled_legal_moves_unique += (
+                max(
+                    per_move_scale_tracker[scale]["sampled_legal_unique"]
+                    for scale in scale_tracker
+                )
             )
             move_counters.modified_board_deterministic_legal_moves += max(
-                legal_deterministic_moves_per_scale_per_move.values()
+                per_move_scale_tracker[scale]["deterministic"]
+                for scale in scale_tracker
             )
 
     # After intervening on all moves in all games, save output_tracker and move_counters to disk
@@ -605,71 +647,77 @@ def perform_board_interventions(
         print(f"File saved to {file_path}")
     for scale in scales:
         print(
-            f"Scale: {scale}, deterministic count: {deterministic_scale_tracker[scale]}, sampled count: {sampled_scale_tracker[scale]}"
+            f"Scale: {scale}, deterministic count: {scale_tracker[scale]['deterministic']}, sampled count: {scale_tracker[scale]['sampled_legal_total']}"
         )
     recording_name = RECORDING_DIR + "/" + recording_name + ".json"
     with open(recording_name, "w") as file:
         records = {}
         for field in fields(move_counters):
             records[field.name] = getattr(move_counters, field.name)
-        records.update(deterministic_scale_tracker)
-        records.update(sampled_scale_tracker)
+        records.update(scale_tracker)
         file.write(json.dumps(records))
 
 
 scales_lookup = {
-    InterventionType.SINGLE_SCALE: np.arange(0.05, 0.61, 0.1),
-    InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
-    InterventionType.SINGLE_TARGET: np.arange(-2.0, -20.1, -4.0),
-    # InterventionType.SINGLE_TARGET: np.arange(-0.1, 0.11, 0.05),
+    InterventionType.SINGLE_SCALE: np.arange(0.05, 0.16, 0.05),
+    InterventionType.AVERAGE_TARGET: np.arange(0.0, -8.1, -4.0),
+    InterventionType.SINGLE_TARGET: np.arange(-2.0, -14.1, -4.0),
 }
+
+# scales_lookup = {
+#     InterventionType.SINGLE_SCALE: np.arange(0.05, 0.61, 0.1),
+#     InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
+#     InterventionType.SINGLE_TARGET: np.arange(-2.0, -20.1, -4.0),
+# }
 
 intervention_type = InterventionType.SINGLE_SCALE
 intervention_type = InterventionType.AVERAGE_TARGET
 # intervention_type = InterventionType.SINGLE_TARGET
 
 intervention_types = [
-    InterventionType.SINGLE_SCALE,
+    # InterventionType.SINGLE_SCALE,
     InterventionType.AVERAGE_TARGET,
     InterventionType.SINGLE_TARGET,
 ]
 
 sampling_type = SamplingType.BOTH
-intervention_type = InterventionType.SINGLE_SCALE
+# intervention_type = InterventionType.SINGLE_SCALE
 
-probe_names = {}
-first_layer = 3
-last_layer = 8
+for intervention_type in intervention_types:
 
-# The last layer in the model has an average empty value about 2x of all other layers
-# For simplicity, we will exclude the last layer from the intervention
-if intervention_type == InterventionType.SINGLE_TARGET:
-    last_layer = 7
+    probe_names = {}
+    first_layer = 3
+    last_layer = 8
 
-for i in range(first_layer, last_layer):
-    probe_names[i] = (
-        f"tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_{i}.pth"
+    # The last layer in the model has an average empty value about 2x of all other layers
+    # For simplicity, we will exclude the last layer from the intervention
+    if intervention_type == InterventionType.SINGLE_TARGET:
+        last_layer = 7
+
+    for i in range(first_layer, last_layer):
+        probe_names[i] = (
+            f"tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_{i}.pth"
+        )
+    probe_data = get_probe_data(probe_names[first_layer])
+
+    scales = scales_lookup[intervention_type]
+
+    recording_name = f"sampling={sampling_type.value}_intervention_type={intervention_type.value}_first_layer={first_layer}_last_layer={last_layer - 1}_scales="
+    for scale in scales:
+        recording_name += f"{str(scale).replace('.', '')[:5]}_"
+
+    print(f"Recording name: {recording_name}")
+
+    perform_board_interventions(
+        probe_names,
+        probe_data,
+        60,
+        intervention_type,
+        sampling_type,
+        recording_name,
+        track_outputs=False,
+        scales=scales,
     )
-probe_data = get_probe_data(probe_names[first_layer])
-
-scales = scales_lookup[intervention_type]
-
-recording_name = f"intervention_type={intervention_type.value}_first_layer={first_layer}_last_layer={last_layer - 1}_scales="
-for scale in scales:
-    recording_name += f"{str(scale).replace('.', '')[:5]}_"
-
-print(f"Recording name: {recording_name}")
-
-perform_board_interventions(
-    probe_names,
-    probe_data,
-    1,
-    intervention_type,
-    sampling_type,
-    recording_name,
-    track_outputs=False,
-    scales=scales,
-)
 
 # For profiling, most cumulative time appears to be in forward pass in chess_utils.get_model_move()
 # def run_profile():
