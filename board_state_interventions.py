@@ -3,10 +3,12 @@ import numpy as np
 from fancy_einsum import einsum
 import chess
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import pickle
 import logging
 from functools import partial
+from enum import Enum
+import json
 
 import chess_utils
 import train_test_chess
@@ -36,11 +38,14 @@ MODEL_DIR = "models/"
 DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 SAVED_PROBE_DIR = "linear_probes/8layer_piece_probe_sweep/"
+RECORDING_DIR = "intervention_logs/"
 SPLIT = "test"
 MODES = 1  # Currently only supporting 1 mode so this is fairly unnecessary
 START_POS = 5
 END_POS = 30
 BLANK_INDEX = chess_utils.PIECE_TO_ONE_HOT_MAPPING[0]
+SAMPLING_MOVES = 10
+TEMPERATURE = 1.0
 
 device = (
     "cuda"
@@ -51,6 +56,29 @@ logger.info(f"Using device: {device}")
 
 with open("models/meta.pkl", "rb") as f:
     META = pickle.load(f)
+
+
+class InterventionType(Enum):
+    SINGLE_SCALE = "single_scale"
+    SINGLE_TARGET = "single_target"
+    AVERAGE_TARGET = "average_target"
+
+
+class SamplingType(Enum):
+    DETERMINISTIC_ONLY = "deterministic_only"
+    # BOTH means determinstic sampling and probabilistic temperature based sampling
+    BOTH = "both"
+
+
+@dataclass
+class MoveCounters:
+    total_moves: int = 0
+    possible_moves: int = 0
+    original_board_deterministic_legal_moves: int = 0
+    original_model_original_board_sampled_legal_moves: int = 0
+    original_model_modified_board_sampled_legal_moves: int = 0
+    modified_board_deterministic_legal_moves: int = 0
+    modified_model_modified_board_sampled_legal_moves: int = 0
 
 
 def get_probe_data(probe_name: str) -> train_test_chess.LinearProbeData:
@@ -206,12 +234,11 @@ def calculate_probe_outputs(
     for layer in probes:
         resid_post = cache["resid_post", layer][:, :]
         linear_probe = probes[layer]
-        probe_out = einsum(
+        probe_outputs[layer] = einsum(
             "batch pos d_model, modes d_model rows cols options -> modes batch pos rows cols options",
             resid_post,
             linear_probe,
         )
-        probe_outputs[layer] = probe_out
     return probe_outputs
 
 
@@ -271,27 +298,70 @@ def average_probe_empty_cell_value(
     return average_cell_values
 
 
+# This is the intervention function. In it, we obtain a vector to flip the square to blank in the model's activations at a given layer
+# Multiply it by some scale factor, then subtract it from the model's activations
+def flip_hook(resid, hook, layer: int, scale: float = 0.1):
+    target = 0.0
+    blank_probe = probes[layer][:, :, r, c, BLANK_INDEX].squeeze()
+    piece_probe = probes[layer][:, :, r, c, moved_piece_probe_index].squeeze()
+
+    flip_dir = (piece_probe * 1.0) - (blank_probe * 1.0)
+
+    if (
+        intervention_type == InterventionType.AVERAGE_TARGET
+        or intervention_type == InterventionType.SINGLE_TARGET
+    ):
+        if intervention_type == InterventionType.AVERAGE_TARGET:
+            target = average_piece_values[layer] + scale
+        else:
+            target = scale
+        scale = calculate_scale_coefficient(
+            resid[0, move_of_interest_index, :],
+            flip_dir,
+            piece_probe,
+            target,
+        )
+        scale = min(0.3, scale)
+
+    if layer < 8:
+        # We want to intervene on multiple positions in the sequence because a move is multiple tokens
+        resid[:, :] -= scale * flip_dir
+
+    coeff = resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
+
+    # So we only print once during inference
+    if resid.shape[1] <= move_of_interest_index + 1:
+        # print(
+        #     f"Layer: {layer}, flip_dir_norm: {flip_dir.norm():10.3f}, coeff: {coeff:10.3f}, scale: {scale:10.3f}, target: {target:10.3f}"
+        # )
+        logger.debug(
+            f"Layer: {layer}, coeff: {coeff:10.3f}, scale: {scale:10.3f}, target: {target:10.3f}"
+        )
+
+
 def perform_board_interventions(
     probe_names: dict[int, str],
     probe_data: train_test_chess.LinearProbeData,
     sample_size: int,
+    intervention_type: InterventionType,
+    sampling_type: SamplingType,
+    recording_name: str,
     track_outputs: bool = False,
-    use_average: bool = False,
     scales: list[float] = [0.1],
 ):
+
     probes, state_stacks_all_chars, white_move_indices = prepare_intervention_data(
         probe_names, probe_data, sample_size
     )
 
-    total_moves_counter = 0
-    possible_moves_counter = 0
-    initial_legal_moves_counter = 0
-    legal_intervention_moves_counter = 0
+    move_counters = MoveCounters()
 
     # Scale tracker stores the number of successful interventions for each scale
-    scale_tracker = {}
+    deterministic_scale_tracker = {}
+    sampled_scale_tracker = {}
     for scale in scales:
-        scale_tracker[scale] = 0
+        deterministic_scale_tracker[scale] = 0
+        sampled_scale_tracker[scale] = 0
 
     # Output tracker stores metadata and the original and modified probe outputs for the entire board per move per game for each layer
     # The results can be analyzed in probe_output_data_exploration.ipynb
@@ -299,19 +369,21 @@ def perform_board_interventions(
     if track_outputs:
         output_tracker = initialize_output_tracker(probes)
 
-    if use_average or track_outputs:
+    if track_outputs or intervention_type == InterventionType.AVERAGE_TARGET:
         average_piece_values = {}
         average_blank_values = {}
 
     for sample_index in range(sample_size):
         for scale in scales:
-            print(f"Scale: {scale}, count: {scale_tracker[scale]}")
+            print(
+                f"Scale: {scale}, deterministic count: {deterministic_scale_tracker[scale]}, sampled count: {sampled_scale_tracker[scale]}"
+            )
 
         for move_of_interest in range(START_POS, END_POS):
             print(
-                f"Sample index: {sample_index}, total moves: {total_moves_counter}, possible moves: {possible_moves_counter}, initial legal moves: {initial_legal_moves_counter}, legal intervention moves: {legal_intervention_moves_counter}"
+                f"Sample index: {sample_index}, total moves: {total_moves_counter}, possible moves: {possible_moves_counter}, initial legal moves: {original_board_deterministic_legal_moves_counter}, legal intervention moves: {modified_board_deterministic_legal_moves_counter}"
             )
-            total_moves_counter += 1
+            move_counters.total_moves += 1
 
             # Step 1: Get the board state at move_of_interest
             move_of_interest_index = white_move_indices[sample_index][move_of_interest]
@@ -324,15 +396,17 @@ def perform_board_interventions(
             # model_input.shape is (1, move_of_interest_index + 1)
             model_input = chess_utils.encode_string(META, pgn_string)
             model_input = torch.tensor(model_input).unsqueeze(0).to(device)
-            model_move = chess_utils.get_model_move(probe_data.model, META, model_input)
+            deterministic_model_move = chess_utils.get_model_move(
+                probe_data.model, META, model_input, temperature=0.0
+            )
 
             # Step 3: Check if the model move is legal. parse_san will throw an exception if the move is illegal
             try:
-                model_move_san = board.parse_san(model_move)
+                model_move_san = board.parse_san(deterministic_model_move)
             except:
                 continue
 
-            initial_legal_moves_counter += 1
+            move_counters.original_board_deterministic_legal_moves += 1
 
             # Step 4: Determine which piece was moved from which source square
             moved_piece = board.piece_at(model_move_san.from_square)
@@ -345,27 +419,54 @@ def perform_board_interventions(
             # If the piece is a king, we skip the intervention as a legal chess game must have a king.
             if moved_piece.piece_type == chess.KING:
                 continue
-            possible_moves_counter += 1
 
             # Step 5: Make a modified board where source square is now empty
             modified_board = board.copy()
             modified_board.set_piece_at(model_move_san.from_square, None)
 
-            if any(move for move in board.legal_moves) == False:
+            if not any(board.legal_moves):
                 print("No legal moves available for the modified board. Skipping...")
-                total_moves_counter -= 1
-                initial_legal_moves_counter -= 1
                 continue
+
+            move_counters.possible_moves += 1
+
+            print("\n\n\n")
+            for _ in range(SAMPLING_MOVES):
+                if sampling_type == SamplingType.DETERMINISTIC_ONLY:
+                    break
+                sampled_model_move = chess_utils.get_model_move(
+                    probe_data.model, META, model_input, temperature=TEMPERATURE
+                )
+                try:
+                    board.parse_san(sampled_model_move)
+                    print(f"Model original move: {sampled_model_move}")
+                    move_counters.original_model_original_board_sampled_legal_moves += 1
+                except:
+                    print(f"Invalid original move: {sampled_model_move}")
+                    pass
+                try:
+                    modified_board.parse_san(sampled_model_move)
+                    print(f"Model modified move: {sampled_model_move}")
+                    move_counters.original_model_modified_board_sampled_legal_moves += 1
+                except:
+                    print(f"Invalid modified move: {sampled_model_move}")
+                    pass
 
             # If we are targetting probe output values, collect the average probe output values. Also, optionally track the outputs for each layer
             _, cache = probe_data.model.run_with_cache(model_input)
 
+            legal_deterministic_moves_per_scale = {}
+            legal_sampled_moves_per_scale = {}
             for scale in scales:
-                probe_data.model.reset_hooks()
+                legal_sampled_moves_per_scale[scale] = 0
+                legal_deterministic_moves_per_scale[scale] = 0
 
-                if use_average or track_outputs:
+                if (
+                    track_outputs
+                    or intervention_type == InterventionType.AVERAGE_TARGET
+                ):
                     probe_outputs = calculate_probe_outputs(probes, cache)
-                    if use_average:
+                    if intervention_type == InterventionType.AVERAGE_TARGET:
                         average_blank_values = average_probe_empty_cell_value(
                             state_stacks_all_chars,
                             probe_outputs,
@@ -390,44 +491,8 @@ def perform_board_interventions(
                             r,
                             c,
                             moved_piece_probe_index,
-                            model_move,
+                            deterministic_model_move,
                             "original",
-                        )
-
-                # This is the intervention function. In it, we obtain a vector to flip the square to blank in the model's activations at a given layer
-                # Multiply it by some scale factor, then subtract it from the model's activations
-                def flip_hook(resid, hook, layer: int, scale: float = 0.1):
-                    target = 0.0
-                    blank_probe = probes[layer][:, :, r, c, BLANK_INDEX].squeeze()
-                    piece_probe = probes[layer][
-                        :, :, r, c, moved_piece_probe_index
-                    ].squeeze()
-
-                    flip_dir = (piece_probe * 1.0) - (blank_probe * 1.0)
-
-                    if use_average:
-                        target = average_piece_values[layer] - 4.0
-
-                        scale = calculate_scale_coefficient(
-                            resid[0, move_of_interest_index, :],
-                            flip_dir,
-                            piece_probe,
-                            target,
-                        )
-                        scale = min(0.3, scale)
-
-                    if layer < 8:
-                        # We want to intervene on multiple positions in the sequence because a move is multiple tokens
-                        resid[:, :] -= scale * flip_dir
-
-                    coeff = (
-                        resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
-                    )
-
-                    # So we only print once during inference
-                    if resid.shape[1] <= move_of_interest_index + 1:
-                        logger.debug(
-                            f"Layer: {layer}, coeff: {coeff:10.3f}, scale: {scale:10.3f}, target: {target:10.3f}"
                         )
 
                 # Step 6: Intervene on the model's activations and get the model move under the modified board state
@@ -437,9 +502,22 @@ def perform_board_interventions(
                     hook_name = f"blocks.{layer}.hook_resid_post"
                     probe_data.model.add_hook(hook_name, temp_hook_fn)
 
-                modified_board_model_move = chess_utils.get_model_move(
+                modified_board_deterministic_model_move = chess_utils.get_model_move(
                     probe_data.model, META, model_input
                 )
+
+                # print("\n\n\n")
+                for _ in range(5):
+                    sampled_model_move = chess_utils.get_model_move(
+                        probe_data.model, META, model_input, temperature=1.0
+                    )
+                    try:
+                        model_move_san = modified_board.parse_san(sampled_model_move)
+                    except:
+                        print(f"Invalid move: {sampled_model_move}")
+                        pass
+                    print(f"Model move: {sampled_model_move}")
+                    legal_sampled_moves_per_scale[scale] += 1
 
                 _, modified_cache = probe_data.model.run_with_cache(model_input)
                 probe_data.model.reset_hooks()
@@ -454,7 +532,7 @@ def perform_board_interventions(
                         r,
                         c,
                         moved_piece_probe_index,
-                        model_move,
+                        deterministic_model_move,
                         "modified",
                     )
                     for layer in output_tracker:
@@ -463,7 +541,7 @@ def perform_board_interventions(
                         output_tracker[layer]["successes"].append(False)
                         output_tracker[layer]["cells"].append((r, c))
                         output_tracker[layer]["pieces"].append(moved_piece_int)
-                        if use_average:
+                        if intervention_type == InterventionType.AVERAGE_TARGET:
                             output_tracker[layer]["average_original_blank_grid"].append(
                                 average_blank_values[layer]
                             )
@@ -473,9 +551,9 @@ def perform_board_interventions(
 
                 # Step 7: Check if the model move under the modified board state is legal
                 try:
-                    modified_board.parse_san(modified_board_model_move)
+                    modified_board.parse_san(modified_board_deterministic_model_move)
                 except:
-                    print(f"\n\n\nFailure at scale: {scale}\n\n\n")
+                    # print(f"\n\n\nFailure at scale: {scale}\n\n\n")
                     # if scale > 0:
                     #     print(board)
                     #     print("_" * 50)
@@ -488,42 +566,92 @@ def perform_board_interventions(
                     #     )
                     continue
 
-                print(f"Success at scale: {scale}")
-                legal_intervention_moves_counter += 1
-
                 if track_outputs:
                     for layer in output_tracker:
                         output_tracker[layer]["successes"][-1] = True
-                break
-                scale_tracker[scale] += 1
+                # break
+                legal_deterministic_moves_per_scale[scale] = 1
+                deterministic_scale_tracker[scale] += 1
+                sampled_scale_tracker[scale] += legal_sampled_moves_per_scale[scale]
+
+            move_counters.modified_model_modified_board_sampled_legal_moves += max(
+                legal_sampled_moves_per_scale.values()
+            )
+            move_counters.modified_board_deterministic_legal_moves += max(
+                legal_deterministic_moves_per_scale.values()
+            )
+
     if track_outputs:
         file_path = "output_tracker.pkl"
         with open(file_path, "wb") as file:
             pickle.dump(output_tracker, file)
         print(f"File saved to {file_path}")
     for scale in scales:
-        print(f"Scale: {scale}, count: {scale_tracker[scale]}")
+        print(f"Scale: {scale}, count: {deterministic_scale_tracker[scale]}")
+    recording_name = RECORDING_DIR + "/" + recording_name + ".json"
+    with open(recording_name, "w") as file:
+        records = {}
+        for field in fields(move_counters):
+            records[field.name] = getattr(move_counters, field.name)
+        records.update(deterministic_scale_tracker)
+        file.write(json.dumps(records))
 
 
-scales = np.arange(0.10, 0.21, 0.05)
-# Add 0.01 to the end of the range to ensure that the last scale is included
-scales = np.append(scales, 0.01)
-scales = np.append(scales, 0.02)
-scales = np.append(scales, 0.05)
+scales_lookup = {
+    InterventionType.SINGLE_SCALE: np.arange(0.05, 0.61, 0.1),
+    InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
+    InterventionType.SINGLE_TARGET: np.arange(-2.0, -20.1, -4.0),
+    # InterventionType.SINGLE_TARGET: np.arange(-0.1, 0.11, 0.05),
+}
 
-scales = np.arange(0.10, 0.16, 0.1)
-# scales = np.arange(0.10, 0.16, 0.05)
-# scales = np.append(scales, 0.05)
+intervention_type = InterventionType.SINGLE_SCALE
+intervention_type = InterventionType.AVERAGE_TARGET
+# intervention_type = InterventionType.SINGLE_TARGET
 
-probe_names = {}
-first_layer = 3
-last_layer = 8
-for i in range(first_layer, last_layer):
-    probe_names[i] = (
-        f"tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_{i}.pth"
-    )
-probe_data = get_probe_data(probe_names[first_layer])
-perform_board_interventions(probe_names, probe_data, 8, use_average=True)
+intervention_types = [
+    InterventionType.SINGLE_SCALE,
+    InterventionType.AVERAGE_TARGET,
+    InterventionType.SINGLE_TARGET,
+]
+
+sampling_types = [SamplingType.DETERMINISTIC, SamplingType.TEMPERATURE]
+
+sampling_type = SamplingType.DETERMINISTIC
+
+for intervention_type in intervention_types:
+    for i in range(0, 8):
+        probe_names = {}
+        first_layer = i
+        last_layer = i + 1
+
+        # The last layer in the model has an average empty value about 2x of all other layers
+        # For simplicity, we will exclude the last layer from the intervention
+        if intervention_type == InterventionType.SINGLE_TARGET:
+            last_layer = 8
+
+        for i in range(first_layer, last_layer):
+            probe_names[i] = (
+                f"tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_{i}.pth"
+            )
+        probe_data = get_probe_data(probe_names[first_layer])
+
+        scales = scales_lookup[intervention_type]
+
+        recording_name = f"intervention_type={intervention_type.value}_first_layer={first_layer}_last_layer={last_layer - 1}_scales="
+        for scale in scales:
+            recording_name += f"{str(scale).replace('.', '')[:5]}_"
+
+        print(f"Recording name: {recording_name}")
+
+        perform_board_interventions(
+            probe_names,
+            probe_data,
+            60,
+            intervention_type,
+            recording_name,
+            track_outputs=False,
+            scales=scales,
+        )
 
 
 # For profiling, most cumulative time appears to be in forward pass in chess_utils.get_model_move()
