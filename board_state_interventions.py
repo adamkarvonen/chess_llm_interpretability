@@ -42,7 +42,7 @@ RECORDING_DIR = "intervention_logs/"
 SPLIT = "test"
 MODES = 1  # Currently only supporting 1 mode so this is fairly unnecessary
 START_POS = 5
-END_POS = 7
+END_POS = 30
 BLANK_INDEX = chess_utils.PIECE_TO_ONE_HOT_MAPPING[0]
 SAMPLING_MOVES = 5
 TEMPERATURE = 1.0
@@ -310,6 +310,7 @@ def create_recording_data(
         records[scale] = {}
         for field in fields(scale_tracker[scale]):
             records[scale][field.name] = getattr(scale_tracker[scale], field.name)
+    records["possible_sampled_moves"] = records["possible_moves"] * SAMPLING_MOVES
     return records
 
 
@@ -320,16 +321,17 @@ def update_move_counters_best_per_move(
     """For each move, we find the best performing scale parameter. We then increment the move counter trackers with these values.
     The purpose is to get an upper bound on effectiveness if we could dynamically select a good scale parameter.
     """
-    scales = per_move_scale_tracker.keys()
-    move_counters.mod_model_tracker.mod_board_sampled_legal_total = max(
-        per_move_scale_tracker[scale].mod_board_sampled_legal_total for scale in scales
-    )
-    move_counters.mod_model_tracker.mod_board_sampled_legal_unique = max(
-        per_move_scale_tracker[scale].mod_board_sampled_legal_unique for scale in scales
-    )
-    move_counters.mod_model_tracker.mod_board_argmax_legal_total = max(
-        per_move_scale_tracker[scale].mod_board_argmax_legal_total for scale in scales
-    )
+    scales = list(per_move_scale_tracker.keys())
+    for field in fields(per_move_scale_tracker[scales[0]]):
+        best_scale_value = max(
+            getattr(per_move_scale_tracker[scale], field.name) for scale in scales
+        )
+        current_scale_value = getattr(move_counters.mod_model_tracker, field.name)
+        setattr(
+            move_counters.mod_model_tracker,
+            field.name,
+            best_scale_value + current_scale_value,
+        )
 
     return move_counters
 
@@ -350,12 +352,12 @@ def sample_moves_from_model(
         )
         try:
             original_board.parse_san(sampled_model_move)
-            print(f"Model original move: {sampled_model_move}")
+            # print(f"Model original move: {sampled_model_move}")
             move_tracker.orig_board_sampled_legal_total += 1
             if sampled_model_move not in unique_moves:
                 move_tracker.orig_board_sampled_legal_unique += 1
         except:
-            print(f"Invalid original move: {sampled_model_move}")
+            # print(f"Invalid original move: {sampled_model_move}")
             pass
         try:
             modified_board.parse_san(sampled_model_move)
@@ -701,6 +703,9 @@ def perform_board_interventions(
         with open(file_path, "wb") as file:
             pickle.dump(output_tracker, file)
         print(f"File saved to {file_path}")
+    print(
+        f"Sample index: {sample_index}, total moves: {move_counters.total_moves}, possible moves: {move_counters.possible_moves}, legal intervention moves: {move_counters.mod_model_tracker.mod_board_argmax_legal_total}"
+    )
     for scale in scales:
         print(
             f"Scale: {scale}, deterministic count: {scale_tracker[scale].mod_board_argmax_legal_total}, sampled count: {scale_tracker[scale].mod_board_sampled_legal_total}"
@@ -745,7 +750,7 @@ sampling_type = SamplingType.BOTH
 for intervention_type in intervention_types:
 
     probe_names = {}
-    first_layer = 3
+    first_layer = 2
     last_layer = 6
 
     # The last layer in the model has an average empty value about 2x of all other layers
@@ -773,7 +778,7 @@ for intervention_type in intervention_types:
     perform_board_interventions(
         probe_names,
         probe_data,
-        1,
+        4,
         intervention_type,
         sampling_type,
         recording_name,
