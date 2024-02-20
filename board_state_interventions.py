@@ -288,6 +288,31 @@ def update_output_tracker_grids(
     return output_tracker
 
 
+def create_recording_data(
+    move_counters: MoveCounters, scale_tracker: dict[int, MoveTracker]
+) -> dict:
+    records = {}
+    records["orig_model_tracker"] = {}
+    records["mod_model_tracker"] = {}
+    for field in fields(move_counters.orig_model_tracker):
+        records["orig_model_tracker"][field.name] = getattr(
+            move_counters.orig_model_tracker, field.name
+        )
+    for field in fields(move_counters.mod_model_tracker):
+        records["mod_model_tracker"][field.name] = getattr(
+            move_counters.mod_model_tracker, field.name
+        )
+    for field in fields(move_counters):
+        if field.name == "orig_model_tracker" or field.name == "mod_model_tracker":
+            continue
+        records[field.name] = getattr(move_counters, field.name)
+    for scale in scale_tracker:
+        records[scale] = {}
+        for field in fields(scale_tracker[scale]):
+            records[scale][field.name] = getattr(scale_tracker[scale], field.name)
+    return records
+
+
 def update_move_counters_best_per_move(
     move_counters: MoveCounters,
     per_move_scale_tracker: dict[int, MoveTracker],
@@ -682,13 +707,7 @@ def perform_board_interventions(
         )
     recording_name = RECORDING_DIR + "/" + recording_name + ".json"
     with open(recording_name, "w") as file:
-        records = {}
-        # for field in fields(move_counters):
-        #     records[field.name] = getattr(move_counters, field.name)
-        for scale in scale_tracker:
-            records[scale] = {}
-            for field in fields(scale_tracker[scale]):
-                records[scale][field.name] = getattr(scale_tracker[scale], field.name)
+        records = create_recording_data(move_counters, scale_tracker)
         file.write(json.dumps(records))
 
 
