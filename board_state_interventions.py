@@ -3,7 +3,7 @@ import numpy as np
 from fancy_einsum import einsum
 import chess
 import numpy as np
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 import pickle
 import logging
 from functools import partial
@@ -101,8 +101,8 @@ class MoveTracker:
 class MoveCounters:
     total_moves: int = 0
     possible_moves: int = 0
-    orig_model_tracker: MoveTracker = MoveTracker()
-    mod_model_tracker: MoveTracker = MoveTracker()
+    orig_model_tracker: MoveTracker = field(default_factory=MoveTracker)
+    mod_model_tracker: MoveTracker = field(default_factory=MoveTracker)
 
 
 def get_probe_data(probe_name: str) -> train_test_chess.LinearProbeData:
@@ -219,7 +219,6 @@ def update_output_tracker_grids(
     model_input: torch.Tensor,
     state_stacks_all_chars: torch.Tensor,
     output_tracker: dict,
-    layer: int,
     move_of_interest_index: int,
     sample_index: int,
     r: int,
@@ -234,7 +233,7 @@ def update_output_tracker_grids(
 
     _, cache = probe_data.model.run_with_cache(model_input)
 
-    for layer in probe_outputs:
+    for layer in output_tracker:
         probe_outputs = calculate_probe_outputs(probes, cache)
         probe_out = probe_outputs[layer]
 
@@ -541,12 +540,6 @@ def perform_board_interventions(
 
             move_counters.possible_moves += 1
 
-            # Sanity check that the original model move is illegal on the modified board
-            if check_if_legal_move(modified_board, argmax_model_move):
-                raise ValueError(
-                    "The argmax model move is legal on the modified board. This should never happen."
-                )
-
             # Step 5.1: Sample n moves from the unmodified model
             # Track how many moves were legal on both the original and modified boards
             move_tracker = sample_moves_from_model(
@@ -576,9 +569,9 @@ def perform_board_interventions(
                     output_tracker = update_output_tracker_grids(
                         probes,
                         probe_data,
+                        model_input,
                         state_stacks_all_chars,
                         output_tracker,
-                        layer,
                         move_of_interest_index,
                         sample_index,
                         r,
@@ -663,9 +656,9 @@ def perform_board_interventions(
                     output_tracker = update_output_tracker_grids(
                         probes,
                         probe_data,
+                        model_input,
                         state_stacks_all_chars,
                         output_tracker,
-                        layer,
                         move_of_interest_index,
                         sample_index,
                         r,
@@ -717,35 +710,37 @@ def perform_board_interventions(
 
 
 scales_lookup = {
-    # InterventionType.SINGLE_SCALE: np.arange(0.05, 0.16, 0.05),
-    # InterventionType.SINGLE_SCALE: np.arange(0.1, 0.16, 0.1),
-    InterventionType.SINGLE_SCALE: [1.0, 1.25, 1.5],
-    # InterventionType.SINGLE_SCALE: [0.5, 0.75, 1.0],
-    # InterventionType.SINGLE_SCALE: [1.5, 2.5, 4.0],
-    # InterventionType.SINGLE_SCALE: [0.3, 0.5],
-    InterventionType.AVERAGE_TARGET: np.arange(0.0, -8.1, -4.0),
-    # InterventionType.SINGLE_TARGET: np.arange(-2.0, -11.1, -3.0),
-    InterventionType.SINGLE_TARGET: np.arange(-5.0, -21.1, -5.0),
+    #     # InterventionType.SINGLE_SCALE: np.arange(0.05, 0.16, 0.05),
+    #     # InterventionType.SINGLE_SCALE: np.arange(0.1, 0.16, 0.1),
+    InterventionType.SINGLE_SCALE: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0],
+    #     # InterventionType.SINGLE_SCALE: [0.5, 0.75, 1.0],
+    #     # InterventionType.SINGLE_SCALE: [1.5, 2.5, 4.0],
+    #     # InterventionType.SINGLE_SCALE: [0.3, 0.5],
+    # InterventionType.SINGLE_TARGET: np.arange(-5.0, -21.1, -5.0),
+    InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -4.0),
+    InterventionType.SINGLE_TARGET: np.arange(-2.0, -18.1, -4.0),
+    #
+}
+
+scales_lookup = {
+    InterventionType.SINGLE_SCALE: [1.1, 1.2, 1.3],
+    InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
+    InterventionType.SINGLE_TARGET: [-9, -10, -11],
 }
 
 # scales_lookup = {
-#     InterventionType.SINGLE_SCALE: np.arange(0.05, 0.61, 0.1),
+#     InterventionType.SINGLE_SCALE: np.arange(1.5, 6.1, 1.5),
 #     InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
-#     InterventionType.SINGLE_TARGET: np.arange(-2.0, -20.1, -4.0),
+#     InterventionType.SINGLE_TARGET: np.arange(-2.0, -20.1, -5.0),
 # }
-
-intervention_type = InterventionType.SINGLE_SCALE
-intervention_type = InterventionType.AVERAGE_TARGET
-# intervention_type = InterventionType.SINGLE_TARGET
 
 intervention_types = [
     InterventionType.SINGLE_SCALE,
     # InterventionType.AVERAGE_TARGET,
-    # InterventionType.SINGLE_TARGET,
+    InterventionType.SINGLE_TARGET,
 ]
 
 sampling_type = SamplingType.BOTH
-# intervention_type = InterventionType.SINGLE_SCALE
 
 for intervention_type in intervention_types:
 
