@@ -339,9 +339,8 @@ def find_odd_indices_offset_one(moves_string: str) -> list[int]:
 
 
 def find_custom_indices(
-    df_filename: str, custom_indexing_fn: Callable[[str], list[int]]
+    custom_indexing_fn: Callable[[str], list[int]], df: pd.DataFrame
 ) -> np.ndarray:
-    df = pd.read_csv(df_filename)
     indices_series = df["transcript"].apply(custom_indexing_fn)
     shortest_length = indices_series.apply(len).min()
     print("Shortest length:", shortest_length)
@@ -378,7 +377,7 @@ def get_model_move(
     model,
     meta: dict,
     idx: torch.Tensor,
-    max_new_tokens: int = 10,
+    max_new_tokens: int = 7,
     temperature=1.0,
     block_size=1023,
 ):

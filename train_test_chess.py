@@ -54,9 +54,7 @@ MAXIMUM_TESTING_GAMES = 10000
 device = (
     "cuda"
     if torch.cuda.is_available()
-    else "mps"
-    if torch.backends.mps.is_available()
-    else "cpu"
+    else "mps" if torch.backends.mps.is_available() else "cpu"
 )
 logger.info(f"Using device: {device}")
 
@@ -65,7 +63,7 @@ wandb_logging = False
 os.environ["WANDB_MODE"] = "online"
 
 # Training parameters
-batch_size = 5
+batch_size = 1
 num_epochs = batch_size
 modes = 1  # This variable currently doesn't do anything, but it is used and adds a dimension to the tensors
 # In the future, modes could be used to do clever things like training multiple probes at once, such as a black piece probe and a white piece probe
@@ -175,12 +173,11 @@ def get_transformer_lens_model(model_name: str, n_layers: int) -> HookedTransfor
 def process_dataframe(
     input_dataframe_file: str,
     config: Config,
-) -> Optional[dict]:
+) -> tuple[Optional[dict], pd.DataFrame]:
     """This is used if we want to have our model do classification on a subset of the Elo bins.
     There are 6 Elo bins. If we want our model to classify between bin 0 and bin 5, we can use this function to
     filter the DataFrame to only include games from these bins."""
     df = pd.read_csv(input_dataframe_file)
-    df.to_csv(PROCESSING_DF_FILENAME, index=False)
     user_state_dict_one_hot_mapping = None
 
     if config.levels_of_interest is not None:
@@ -192,15 +189,13 @@ def process_dataframe(
         logger.info(f"Levels to be used in probe dataset: {matches}")
 
         # Filter the DataFrame based on these matches
-        filtered_df = df[df[config.column_name].isin(matches)]
-        filtered_df.to_csv(PROCESSING_DF_FILENAME, index=False)
-        logger.info(f"Number of games in filtered dataset: {len(filtered_df)}")
+        df = df[df[config.column_name].isin(matches)]
+        logger.info(f"Number of games in filtered dataset: {len(df)}")
 
-    return user_state_dict_one_hot_mapping
+    return user_state_dict_one_hot_mapping, df
 
 
-def get_board_seqs_string() -> list[str]:
-    df = pd.read_csv(PROCESSING_DF_FILENAME)
+def get_board_seqs_string(df: pd.DataFrame) -> list[str]:
     row_length = len(df["transcript"].iloc[0])
     num_games = len(df)
 
@@ -216,8 +211,7 @@ def get_board_seqs_string() -> list[str]:
     return board_seqs_string
 
 
-def get_board_seqs_int() -> torch.tensor:
-    df = pd.read_csv(PROCESSING_DF_FILENAME)
+def get_board_seqs_int(df: pd.DataFrame) -> torch.tensor:
     encoded_df = df["transcript"].apply(encode)
     logger.info(encoded_df.head())
     board_seqs_int = torch.tensor(encoded_df.apply(list).tolist())
@@ -228,8 +222,7 @@ def get_board_seqs_int() -> torch.tensor:
 # %%
 
 
-def get_skill_stack(config: Config) -> torch.tensor:
-    df = pd.read_csv(f"{PROCESSING_DF_FILENAME}")
+def get_skill_stack(config: Config, df: pd.DataFrame) -> torch.tensor:
     skill_levels_list = df[config.column_name].tolist()
 
     skill_stack = torch.tensor(skill_levels_list)
@@ -238,9 +231,9 @@ def get_skill_stack(config: Config) -> torch.tensor:
     return skill_stack
 
 
-def get_custom_indices(custom_indexing_function: callable) -> torch.tensor:
+def get_custom_indices(custom_indexing_function: callable, df: pd.DataFrame) -> torch.tensor:
     custom_indices = chess_utils.find_custom_indices(
-        PROCESSING_DF_FILENAME, custom_indexing_function
+        custom_indexing_function, df
     )
     custom_indices = torch.tensor(custom_indices).long()
     logger.info(f"custom_indices shape: {custom_indices.shape}")
@@ -531,13 +524,13 @@ def construct_linear_probe_data(
         assert "lichess" not in model_name, "Are you sure you're using the right model?"
 
     model = get_transformer_lens_model(model_name, n_layers)
-    user_state_dict_one_hot_mapping = process_dataframe(input_dataframe_file, config)
-    board_seqs_string = get_board_seqs_string()
-    board_seqs_int = get_board_seqs_int()
+    user_state_dict_one_hot_mapping, df = process_dataframe(input_dataframe_file, config)
+    board_seqs_string = get_board_seqs_string(df)
+    board_seqs_int = get_board_seqs_int(df)
     skill_stack = None
     if config.probing_for_skill:
-        skill_stack = get_skill_stack(config)
-    custom_indices = get_custom_indices(config.custom_indexing_function)
+        skill_stack = get_skill_stack(config, df)
+    custom_indices = get_custom_indices(config.custom_indexing_function, df)
 
     game_length_in_chars = len(board_seqs_string[0])
     num_games = len(board_seqs_string)
