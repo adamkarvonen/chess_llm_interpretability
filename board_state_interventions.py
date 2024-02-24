@@ -105,7 +105,7 @@ class MoveCounters:
     mod_model_tracker: MoveTracker = field(default_factory=MoveTracker)
 
 
-def get_probe_data(probe_name: str) -> train_test_chess.LinearProbeData:
+def get_probe_data(probe_name: str, num_games: int) -> train_test_chess.LinearProbeData:
     probe_file_location = f"{SAVED_PROBE_DIR}{probe_name}"
     with open(probe_file_location, "rb") as f:
         state_dict = torch.load(f, map_location=torch.device(device))
@@ -135,10 +135,10 @@ def get_probe_data(probe_name: str) -> train_test_chess.LinearProbeData:
             input_dataframe_file,
             layer,
             dataset_prefix,
-            split,
             n_layers,
             model_name,
             config,
+            num_games,
         )
         return probe_data
 
@@ -742,6 +742,8 @@ intervention_types = [
 
 sampling_type = SamplingType.BOTH
 
+num_games = 4
+
 for intervention_type in intervention_types:
 
     probe_names = {}
@@ -757,7 +759,7 @@ for intervention_type in intervention_types:
         probe_names[i] = (
             f"tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_{i}.pth"
         )
-    probe_data = get_probe_data(probe_names[first_layer])
+    probe_data = get_probe_data(probe_names[first_layer], num_games)
 
     piece_coe = 1.0
     blank_coe = 0.0
@@ -773,7 +775,7 @@ for intervention_type in intervention_types:
     perform_board_interventions(
         probe_names,
         probe_data,
-        4,
+        num_games,
         intervention_type,
         sampling_type,
         recording_name,
