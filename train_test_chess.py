@@ -47,10 +47,7 @@ MODEL_DIR = "models/"
 DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 SAVED_PROBE_DIR = "linear_probes/saved_probes/"
-PROCESSING_DF_FILENAME = f"{DATA_DIR}temporary_in_processing.csv"
 WANDB_PROJECT = "chess_linear_probes"
-MAXIMUM_TRAINING_GAMES = 5000
-MAXIMUM_TESTING_GAMES = 10000
 BATCH_SIZE = 1
 
 device = (
@@ -85,15 +82,22 @@ assert decode(encode(meta_round_trip_input)) == meta_round_trip_input
 # %%
 @dataclass
 class TrainingParams:
-    num_epochs: int = 5
     modes: int = 1
     # modes currently doesn't do anything, but it is used and adds a dimension to the tensors
     # In the future, modes could be used to do clever things like training multiple probes at once, such as a black piece probe and a white piece probe
     wd: float = 0.01
     lr: float = 0.001
+    beta1: float = 0.9
+    beta2: float = 0.99
+    max_train_games: int = 10000
+    max_test_games: int = 10000
+    max_val_games: int = 1000
+    max_iters: int = 50000
+    eval_iters: int = 50
+    num_epochs: int = max_iters // max_train_games
 
 
-train_params = TrainingParams()
+TRAIN_PARAMS = TrainingParams()
 
 
 @dataclass
@@ -211,7 +215,7 @@ def init_logging_dict(
 
     indexing_function_name = config.custom_indexing_function.__name__
 
-    wandb_run_name = f"{config.linear_probe_name}_{model_name}_layer_{probe_data.layer}_indexing_{indexing_function_name}_max_games_{MAXIMUM_TRAINING_GAMES}"
+    wandb_run_name = f"{config.linear_probe_name}_{model_name}_layer_{probe_data.layer}_indexing_{indexing_function_name}_max_games_{TRAIN_PARAMS.max_train_games}"
     if config.levels_of_interest is not None:
         wandb_run_name += "_levels"
         for level in config.levels_of_interest:
@@ -222,11 +226,11 @@ def init_logging_dict(
         "layer": probe_data.layer,
         "indexing_function_name": indexing_function_name,
         "batch_size": BATCH_SIZE,
-        "lr": train_params.lr,
-        "wd": train_params.wd,
+        "lr": TRAIN_PARAMS.lr,
+        "wd": TRAIN_PARAMS.wd,
         "pos_start": config.pos_start,
-        "num_epochs": train_params.num_epochs,
-        "modes": train_params.modes,
+        "num_epochs": TRAIN_PARAMS.num_epochs,
+        "modes": TRAIN_PARAMS.modes,
         "wandb_project": WANDB_PROJECT,
         "config_name": config.linear_probe_name,
         "column_name": config.column_name,
@@ -235,6 +239,7 @@ def init_logging_dict(
         "dataset_prefix": dataset_prefix,
         "model_name": model_name,
         "n_layers": n_layers,
+        "wandb_run_name": wandb_run_name,
     }
 
     return logging_dict
@@ -334,7 +339,7 @@ def prepare_data_batch(
     # logger.debug("after indexing state stack shape", state_stack.shape)
 
     state_stack_one_hot = chess_utils.state_stack_to_one_hot(
-        train_params.modes,
+        TRAIN_PARAMS.modes,
         config.num_rows,
         config.num_cols,
         config.min_val,
@@ -416,8 +421,8 @@ def estimate_loss(
     one_hot_range: int,
 ) -> dict[str, dict[str, float]]:
     out = {"train": {"loss": 0, "accuracy": 0}, "val": {"loss": 0, "accuracy": 0}}
-    # val_games may be less than 100, so we need to make sure we don't evaluate more than val_games
-    eval_iters = min((100 // BATCH_SIZE) * BATCH_SIZE, val_games)
+
+    eval_iters = (TRAIN_PARAMS.eval_iters // BATCH_SIZE) * BATCH_SIZE
 
     train_indices = torch.randperm(train_games)[:eval_iters]
     val_indices = torch.randperm(val_games) + train_games  # to avoid overlap
@@ -452,15 +457,18 @@ def train_linear_probe_cross_entropy(
 ):
     """Trains a linear probe on the train set, contained in probe_data."""
     assert logging_dict["split"] == "train", "Don't train on the test set"
-    # I use min because the probes seem to mostly converge within 25k games
-    num_games = min(
-        (len(probe_data.board_seqs_int), MAXIMUM_TRAINING_GAMES),
-    )
-    logging_dict["num_games"] = num_games
-    train_games = (int(num_games * 0.99) // BATCH_SIZE) * BATCH_SIZE
-    val_games = ((num_games - train_games) // BATCH_SIZE) * BATCH_SIZE
 
-    max_iters = train_games * train_params.num_epochs
+    val_games = (TRAIN_PARAMS.max_val_games // BATCH_SIZE) * BATCH_SIZE
+    train_games = (TRAIN_PARAMS.max_train_games // BATCH_SIZE) * BATCH_SIZE
+
+    num_games = train_games + val_games
+
+    if len(probe_data.board_seqs_int) < num_games:
+        raise ValueError("Not enough games to train on")
+        # We raise an error so it doesn't fail silently. If we want to use less games, we can comment the error out
+        # and add some logic to set train and val games to the number of games we have
+
+    logging_dict["num_games"] = num_games
 
     one_hot_range = config.max_val - config.min_val + 1
     if config.levels_of_interest is not None:
@@ -468,7 +476,7 @@ def train_linear_probe_cross_entropy(
 
     linear_probe_name = f"{PROBE_DIR}{model_name}_{config.linear_probe_name}_layer_{probe_data.layer}.pth"
     linear_probe = torch.randn(
-        train_params.modes,
+        TRAIN_PARAMS.modes,
         probe_data.model.cfg.d_model,
         config.num_rows,
         config.num_cols,
@@ -479,17 +487,14 @@ def train_linear_probe_cross_entropy(
     linear_probe.requires_grad = True
     logger.info(f"linear_probe shape: {linear_probe.shape}")
 
-    linear_probe_name = f"{PROBE_DIR}{model_name}_{config.linear_probe_name}_layer_{probe_data.layer}_lr_{train_params.lr}.pth"
     optimiser = torch.optim.AdamW(
         [linear_probe],
-        lr=train_params.lr,
-        betas=(0.9, 0.99),
-        weight_decay=train_params.wd,
+        lr=TRAIN_PARAMS.lr,
+        betas=(TRAIN_PARAMS.beta1, TRAIN_PARAMS.beta2),
+        weight_decay=TRAIN_PARAMS.wd,
     )
 
     logger.info(f"custom_indices shape: {probe_data.custom_indices.shape}")
-
-    # logger.debug(dots_indices.shape)
 
     if wandb_logging:
         import wandb
@@ -503,7 +508,7 @@ def train_linear_probe_cross_entropy(
     current_iter = 0
     loss = 0
     accuracy = 0
-    for epoch in range(train_params.num_epochs):
+    for epoch in range(TRAIN_PARAMS.num_epochs):
         full_train_indices = torch.randperm(train_games)
         for i in tqdm(range(0, train_games, BATCH_SIZE)):
 
@@ -533,20 +538,27 @@ def train_linear_probe_cross_entropy(
             optimiser.step()
             optimiser.zero_grad()
             current_iter += BATCH_SIZE
-        losses = estimate_loss(
-            train_games, val_games, linear_probe, probe_data, config, one_hot_range
-        )
-        logger.info(f"epoch {epoch}, losses: {losses}, accuracy: {accuracy}")
-        if wandb_logging:
-            wandb.log(
-                {
-                    "train_loss": losses["train"]["loss"],
-                    "train_acc": losses["train"]["accuracy"],
-                    "val_loss": losses["val"]["loss"],
-                    "val_acc": losses["val"]["accuracy"],
-                    "epoch": epoch,
-                }
-            )
+
+            if current_iter % 1000 == 0:
+                losses = estimate_loss(
+                    train_games,
+                    val_games,
+                    linear_probe,
+                    probe_data,
+                    config,
+                    one_hot_range,
+                )
+                logger.info(f"epoch {epoch}, losses: {losses}, accuracy: {accuracy}")
+                if wandb_logging:
+                    wandb.log(
+                        {
+                            "train_loss": losses["train"]["loss"],
+                            "train_acc": losses["train"]["accuracy"],
+                            "val_loss": losses["val"]["loss"],
+                            "val_acc": losses["val"]["accuracy"],
+                            "epoch": epoch,
+                        }
+                    )
     checkpoint = {
         "linear_probe": linear_probe,
         "final_loss": loss,
@@ -563,10 +575,10 @@ def construct_linear_probe_data(
     input_dataframe_file: str,
     layer: int,
     dataset_prefix: str,
-    split: str,
     n_layers: int,
     model_name: str,
     config: Config,
+    max_games: int,
 ) -> LinearProbeData:
     """We need the following data to train or test a linear probe:
     - The layer to probe in the GPT
@@ -591,6 +603,7 @@ def construct_linear_probe_data(
     user_state_dict_one_hot_mapping, df = process_dataframe(
         input_dataframe_file, config
     )
+    df = df[:max_games]
     board_seqs_string = get_board_seqs_string(df)
     board_seqs_int = get_board_seqs_int(df)
     skill_stack = None
@@ -651,10 +664,12 @@ def test_linear_probe_cross_entropy(
     """Takes a linear probe and tests it on the test set, contained in probe_data. Saves the results to a pickle file."""
     assert logging_dict["split"] == "test", "Don't test on the train set"
 
-    num_games = min(
-        ((len(probe_data.board_seqs_int) // BATCH_SIZE) * BATCH_SIZE),
-        (MAXIMUM_TESTING_GAMES // BATCH_SIZE) * BATCH_SIZE,
-    )  # num_games must be divisible by batch_size
+    num_games = (TRAIN_PARAMS.max_test_games // BATCH_SIZE) * BATCH_SIZE
+
+    if (len(probe_data.board_seqs_int) // BATCH_SIZE) * BATCH_SIZE < num_games:
+        raise ValueError("Not enough games to test on")
+        # We raise an error so it doesn't fail silently. If we want to use less games, we can comment the error out
+        num_games = (len(probe_data.board_seqs_int) // BATCH_SIZE) * BATCH_SIZE
 
     one_hot_range = config.max_val - config.min_val + 1
     if config.levels_of_interest is not None:
@@ -791,10 +806,10 @@ if __name__ == "__main__":
                     input_dataframe_file,
                     layer,
                     dataset_prefix,
-                    split,
                     n_layers,
                     model_name,
                     config,
+                    TRAIN_PARAMS.max_test_games,
                 )
 
                 logging_dict = init_logging_dict(
@@ -829,14 +844,15 @@ if __name__ == "__main__":
             config, input_dataframe_file, dataset_prefix
         )
 
+        max_games = TRAIN_PARAMS.max_train_games + TRAIN_PARAMS.max_val_games
         probe_data = construct_linear_probe_data(
             input_dataframe_file,
             layer,
             dataset_prefix,
-            split,
             n_layers,
             model_name,
             config,
+            max_games,
         )
 
         logging_dict = init_logging_dict(
