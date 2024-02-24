@@ -48,7 +48,7 @@ DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 SAVED_PROBE_DIR = "linear_probes/saved_probes/"
 PROCESSING_DF_FILENAME = f"{DATA_DIR}temporary_in_processing.csv"
-MAXIMUM_TRAINING_GAMES = 25000
+MAXIMUM_TRAINING_GAMES = 5000
 MAXIMUM_TESTING_GAMES = 10000
 
 device = (
@@ -59,17 +59,18 @@ device = (
 logger.info(f"Using device: {device}")
 
 
-wandb_logging = False
+wandb_logging = True
 os.environ["WANDB_MODE"] = "online"
 
 # Training parameters
 batch_size = 1
-num_epochs = batch_size
+num_epochs = 5
 modes = 1  # This variable currently doesn't do anything, but it is used and adds a dimension to the tensors
 # In the future, modes could be used to do clever things like training multiple probes at once, such as a black piece probe and a white piece probe
 wd = 0.01
-max_lr = 3e-4
+max_lr = 0.01
 min_lr = max_lr / 10
+min_lr = max_lr
 decay_lr = True
 
 # meta is used to encode the string pgn strings into integer sequences
@@ -105,7 +106,9 @@ class Config:
     levels_of_interest: Optional[list[int]] = None
     column_name: str = None
     probing_for_skill: bool = False
-    pos_start: int = 5  # indexes into custom_indexing_function. Example: if pos_start = 25, for find_dots_indices, selects everything after the first 25 moves
+    pos_start: int = (
+        5  # indexes into custom_indexing_function. Example: if pos_start = 25, for find_dots_indices, selects everything after the first 25 moves
+    )
 
 
 piece_config = Config(
@@ -231,10 +234,10 @@ def get_skill_stack(config: Config, df: pd.DataFrame) -> torch.tensor:
     return skill_stack
 
 
-def get_custom_indices(custom_indexing_function: callable, df: pd.DataFrame) -> torch.tensor:
-    custom_indices = chess_utils.find_custom_indices(
-        custom_indexing_function, df
-    )
+def get_custom_indices(
+    custom_indexing_function: callable, df: pd.DataFrame
+) -> torch.tensor:
+    custom_indices = chess_utils.find_custom_indices(custom_indexing_function, df)
     custom_indices = torch.tensor(custom_indices).long()
     logger.info(f"custom_indices shape: {custom_indices.shape}")
     return custom_indices
@@ -262,6 +265,165 @@ def get_lr(current_iter: int, max_iters: int, max_lr: float, min_lr: float) -> f
     return decayed_lr
 
 
+def prepare_data_batch(
+    indices: torch.Tensor, probe_data: LinearProbeData, config: Config
+) -> tuple[torch.Tensor, torch.Tensor]:
+    list_of_indices = (
+        indices.tolist()
+    )  # For indexing into the board_seqs_string list of strings
+    # logger.debug(list_of_indices)
+    games_int = probe_data.board_seqs_int[indices]
+    games_int = games_int[:, :]
+    # logger.debug(games_int.shape)
+    games_str = [probe_data.board_seqs_string[idx] for idx in list_of_indices]
+    games_str = [s[:] for s in games_str]
+    games_dots = probe_data.custom_indices[indices]
+    games_dots = games_dots[:, config.pos_start :]
+    # logger.debug(games_dots.shape)
+
+    if config.probing_for_skill:
+        games_skill = probe_data.skill_stack[indices]
+        # logger.debug(games_skill.shape)
+    else:
+        games_skill = None
+
+    state_stack = chess_utils.create_state_stacks(
+        games_str, config.custom_board_state_function, games_skill
+    )
+    # logger.debug(state_stack.shape)
+    indexed_state_stacks = []
+
+    for batch_idx in range(batch_size):
+        # Get the indices for the current batch
+        dots_indices_for_batch = games_dots[batch_idx]
+
+        # Index the state_stack for the current batch
+        indexed_state_stack = state_stack[:, batch_idx, dots_indices_for_batch, :, :]
+
+        # Append the result to the list
+        indexed_state_stacks.append(indexed_state_stack)
+
+    # Stack the indexed state stacks along the first dimension
+    state_stack = torch.stack(indexed_state_stacks)
+
+    # Use einops to rearrange the dimensions after stacking
+    state_stack = einops.rearrange(
+        state_stack, "batch modes pos row col -> modes batch pos row col"
+    )
+
+    # logger.debug("after indexing state stack shape", state_stack.shape)
+
+    state_stack_one_hot = chess_utils.state_stack_to_one_hot(
+        modes,
+        config.num_rows,
+        config.num_cols,
+        config.min_val,
+        config.max_val,
+        device,
+        state_stack,
+        probe_data.user_state_dict_one_hot_mapping,
+    ).to(device)
+
+    # logger.debug(state_stack_one_hot.shape)
+    with torch.inference_mode():
+        _, cache = probe_data.model.run_with_cache(
+            games_int.to(device)[:, :-1], return_type=None
+        )
+        resid_post = cache["resid_post", probe_data.layer][:, :]
+    # Initialize a list to hold the indexed state stacks
+    indexed_resid_posts = []
+
+    for batch_idx in range(games_dots.size(0)):
+        # Get the indices for the current batch
+        dots_indices_for_batch = games_dots[batch_idx]
+
+        # Index the state_stack for the current batch
+        indexed_resid_post = resid_post[batch_idx, dots_indices_for_batch]
+
+        # Append the result to the list
+        indexed_resid_posts.append(indexed_resid_post)
+
+    # Stack the indexed state stacks along the first dimension
+    resid_post = torch.stack(indexed_resid_posts)
+    # logger.debug("Resid post", resid_post.shape)
+
+    return state_stack_one_hot, resid_post
+
+
+def linear_probe_forward_pass(
+    linear_probe: torch.Tensor,
+    state_stack_one_hot: torch.Tensor,
+    resid_post: torch.Tensor,
+    one_hot_range: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    probe_out = einsum(
+        "batch pos d_model, modes d_model rows cols options -> modes batch pos rows cols options",
+        resid_post,
+        linear_probe,
+    )
+    logger.debug(
+        f"probe_out: {probe_out.shape},state_stack_one_hot: {state_stack_one_hot.shape}"
+    )
+
+    assert probe_out.shape == state_stack_one_hot.shape
+
+    accuracy = (
+        (probe_out[0].argmax(-1) == state_stack_one_hot[0].argmax(-1)).float().mean()
+    )
+
+    probe_log_probs = probe_out.log_softmax(-1)
+    probe_correct_log_probs = (
+        einops.reduce(
+            probe_log_probs * state_stack_one_hot,
+            "modes batch pos rows cols options -> modes pos rows cols",
+            "mean",
+        )
+        * one_hot_range
+    )  # Multiply to correct for the mean over one_hot_range
+    loss = -probe_correct_log_probs[0, :].mean(0).sum()
+
+    return loss, accuracy
+
+
+# helps estimate an arbitrarily accurate loss over either split using many batches
+@torch.no_grad()
+def estimate_loss(
+    train_games: int,
+    val_games: int,
+    linear_probe: torch.Tensor,
+    probe_data: LinearProbeData,
+    config: Config,
+    one_hot_range: int,
+) -> dict[str, dict[str, float]]:
+    out = {}
+    # val_games may be less than 100, so we need to make sure we don't evaluate more than val_games
+    eval_iters = min((100 // batch_size) * batch_size, val_games)
+
+    train_indices = torch.randperm(train_games)[:eval_iters]
+    val_indices = torch.randperm(val_games) + train_games  # to avoid overlap
+    val_indices = val_indices[:eval_iters]
+
+    split_indices = {"train": train_indices, "val": val_indices}
+    for split in split_indices:
+        losses = torch.zeros(eval_iters)
+        accuracies = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            indices = split_indices[split][k : k + batch_size]
+
+            state_stack_one_hot, resid_post = prepare_data_batch(
+                indices, probe_data, config
+            )
+
+            loss, accuracy = linear_probe_forward_pass(
+                linear_probe, state_stack_one_hot, resid_post, one_hot_range
+            )
+            losses[k] = loss.item()
+            accuracies[k] = accuracy.item()
+        out[split]["loss"] = losses.mean()
+        out[split]["accuracy"] = accuracies.mean()
+    return out
+
+
 # %%
 def train_linear_probe_cross_entropy(
     probe_data: LinearProbeData,
@@ -272,10 +434,12 @@ def train_linear_probe_cross_entropy(
     assert misc_logging_dict["split"] == "train", "Don't train on the test set"
     # I use min because the probes seem to mostly converge within 25k games
     num_games = min(
-        ((len(probe_data.board_seqs_int) // batch_size) * batch_size),
-        (MAXIMUM_TRAINING_GAMES // batch_size) * batch_size,
-    )  # Unfortunately, num_games must be divisible by batch_size TODO: Fix this
-    max_iters = num_games * num_epochs
+        (len(probe_data.board_seqs_int), MAXIMUM_TRAINING_GAMES),
+    )
+    train_games = (int(num_games * 0.99) // batch_size) * batch_size
+    val_games = ((num_games - train_games) // batch_size) * batch_size
+
+    max_iters = train_games * num_epochs
 
     one_hot_range = config.max_val - config.min_val + 1
     if config.levels_of_interest is not None:
@@ -293,7 +457,9 @@ def train_linear_probe_cross_entropy(
     ) / np.sqrt(probe_data.model.cfg.d_model)
     linear_probe.requires_grad = True
     logger.info(f"linear_probe shape: {linear_probe.shape}")
+
     lr = max_lr
+    linear_probe_name = f"{PROBE_DIR}{model_name}_{config.linear_probe_name}_layer_{probe_data.layer}_max_lr_{max_lr}_min_lr_{min_lr}.pth"
     optimiser = torch.optim.AdamW(
         [linear_probe], lr=lr, betas=(0.9, 0.99), weight_decay=wd
     )
@@ -308,6 +474,7 @@ def train_linear_probe_cross_entropy(
 
     wandb_project = "chess_linear_probes"
     wandb_run_name = f"{config.linear_probe_name}_{model_name}_layer_{probe_data.layer}_indexing_{indexing_function_name}"
+    wandb_run_name = f"{linear_probe_name}_{model_name}_layer_{probe_data.layer}_indexing_{indexing_function_name}_num_games_{MAXIMUM_TRAINING_GAMES}"
     if config.levels_of_interest is not None:
         wandb_run_name += "_levels"
         for level in config.levels_of_interest:
@@ -348,120 +515,21 @@ def train_linear_probe_cross_entropy(
     loss = 0
     accuracy = 0
     for epoch in range(num_epochs):
-        full_train_indices = torch.randperm(num_games)
-        for i in tqdm(range(0, num_games, batch_size)):
+        full_train_indices = torch.randperm(train_games)
+        for i in tqdm(range(0, train_games, batch_size)):
             lr = get_lr(current_iter, max_iters, max_lr, min_lr) if decay_lr else lr
             for param_group in optimiser.param_groups:
                 param_group["lr"] = lr
 
             indices = full_train_indices[i : i + batch_size]
-            list_of_indices = (
-                indices.tolist()
-            )  # For indexing into the board_seqs_string list of strings
-            # logger.debug(list_of_indices)
-            games_int = probe_data.board_seqs_int[indices]
-            games_int = games_int[:, :]
-            # logger.debug(games_int.shape)
-            games_str = [probe_data.board_seqs_string[idx] for idx in list_of_indices]
-            games_str = [s[:] for s in games_str]
-            games_dots = probe_data.custom_indices[indices]
-            games_dots = games_dots[:, config.pos_start :]
-            # logger.debug(games_dots.shape)
 
-            if config.probing_for_skill:
-                games_skill = probe_data.skill_stack[indices]
-                # logger.debug(games_skill.shape)
-            else:
-                games_skill = None
-
-            state_stack = chess_utils.create_state_stacks(
-                games_str, config.custom_board_state_function, games_skill
-            )
-            # logger.debug(state_stack.shape)
-            indexed_state_stacks = []
-
-            for batch_idx in range(batch_size):
-                # Get the indices for the current batch
-                dots_indices_for_batch = games_dots[batch_idx]
-
-                # Index the state_stack for the current batch
-                indexed_state_stack = state_stack[
-                    :, batch_idx, dots_indices_for_batch, :, :
-                ]
-
-                # Append the result to the list
-                indexed_state_stacks.append(indexed_state_stack)
-
-            # Stack the indexed state stacks along the first dimension
-            state_stack = torch.stack(indexed_state_stacks)
-
-            # Use einops to rearrange the dimensions after stacking
-            state_stack = einops.rearrange(
-                state_stack, "batch modes pos row col -> modes batch pos row col"
+            state_stack_one_hot, resid_post = prepare_data_batch(
+                indices, probe_data, config
             )
 
-            # logger.debug("after indexing state stack shape", state_stack.shape)
-
-            state_stack_one_hot = chess_utils.state_stack_to_one_hot(
-                modes,
-                config.num_rows,
-                config.num_cols,
-                config.min_val,
-                config.max_val,
-                device,
-                state_stack,
-                probe_data.user_state_dict_one_hot_mapping,
-            ).to(device)
-
-            # logger.debug(state_stack_one_hot.shape)
-            with torch.inference_mode():
-                _, cache = probe_data.model.run_with_cache(
-                    games_int.to(device)[:, :-1], return_type=None
-                )
-                resid_post = cache["resid_post", probe_data.layer][:, :]
-            # Initialize a list to hold the indexed state stacks
-            indexed_resid_posts = []
-
-            for batch_idx in range(games_dots.size(0)):
-                # Get the indices for the current batch
-                dots_indices_for_batch = games_dots[batch_idx]
-
-                # Index the state_stack for the current batch
-                indexed_resid_post = resid_post[batch_idx, dots_indices_for_batch]
-
-                # Append the result to the list
-                indexed_resid_posts.append(indexed_resid_post)
-
-            # Stack the indexed state stacks along the first dimension
-            resid_post = torch.stack(indexed_resid_posts)
-            # logger.debug("Resid post", resid_post.shape)
-            probe_out = einsum(
-                "batch pos d_model, modes d_model rows cols options -> modes batch pos rows cols options",
-                resid_post,
-                linear_probe,
+            loss, accuracy = linear_probe_forward_pass(
+                linear_probe, state_stack_one_hot, resid_post, one_hot_range
             )
-            logger.debug(
-                f"probe_out: {probe_out.shape},state_stack_one_hot: {state_stack_one_hot.shape},state_stack: {state_stack.shape}"
-            )
-
-            assert probe_out.shape == state_stack_one_hot.shape
-
-            accuracy = (
-                (probe_out[0].argmax(-1) == state_stack_one_hot[0].argmax(-1))
-                .float()
-                .mean()
-            )
-
-            probe_log_probs = probe_out.log_softmax(-1)
-            probe_correct_log_probs = (
-                einops.reduce(
-                    probe_log_probs * state_stack_one_hot,
-                    "modes batch pos rows cols options -> modes pos rows cols",
-                    "mean",
-                )
-                * one_hot_range
-            )  # Multiply to correct for the mean over one_hot_range
-            loss = -probe_correct_log_probs[0, :].mean(0).sum()
 
             loss.backward()
             if i % 100 == 0:
@@ -482,7 +550,20 @@ def train_linear_probe_cross_entropy(
             optimiser.step()
             optimiser.zero_grad()
             current_iter += batch_size
-
+        losses = estimate_loss(
+            train_games, val_games, linear_probe, probe_data, config, one_hot_range
+        )
+        logger.info(f"epoch {epoch}, losses: {losses}, accuracy: {accuracy}")
+        if wandb_logging:
+            wandb.log(
+                {
+                    "train_loss": losses["train"]["loss"],
+                    "train_acc": losses["train"]["accuracy"],
+                    "val_loss": losses["val"]["loss"],
+                    "val_acc": losses["val"]["accuracy"],
+                    "epoch": epoch,
+                }
+            )
     checkpoint = {
         "linear_probe": linear_probe,
         "final_loss": loss,
@@ -524,7 +605,9 @@ def construct_linear_probe_data(
         assert "lichess" not in model_name, "Are you sure you're using the right model?"
 
     model = get_transformer_lens_model(model_name, n_layers)
-    user_state_dict_one_hot_mapping, df = process_dataframe(input_dataframe_file, config)
+    user_state_dict_one_hot_mapping, df = process_dataframe(
+        input_dataframe_file, config
+    )
     board_seqs_string = get_board_seqs_string(df)
     board_seqs_int = get_board_seqs_int(df)
     skill_stack = None
@@ -642,139 +725,32 @@ def test_linear_probe_cross_entropy(
     loss = 0
     accuracy = 0
     accuracy_list = []
-    probe_out_list = (
-        []
-    )  # These are currently unused, they could be used to analyze error rate per turn or square
-    state_stack_one_hot_list = []
     loss_list = []
     with torch.inference_mode():
         full_test_indices = torch.arange(0, num_games)
         for i in tqdm(range(0, num_games, batch_size)):
             indices = full_test_indices[i : i + batch_size]
-            list_of_indices = (
-                indices.tolist()
-            )  # For indexing into the board_seqs_string list of strings
-            # logger.debug(list_of_indices)
-            games_int = probe_data.board_seqs_int[indices]
-            games_int = games_int[:, :]
-            # logger.debug(games_int.shape)
-            games_str = [probe_data.board_seqs_string[idx] for idx in list_of_indices]
-            games_str = [s[:] for s in games_str]
-            games_dots = probe_data.custom_indices[indices]
-            games_dots = games_dots[:, config.pos_start :]
-            # logger.debug(games_dots.shape)
 
-            if config.probing_for_skill:
-                games_skill = probe_data.skill_stack[indices]
-                # logger.debug(games_skill.shape)
-            else:
-                games_skill = None
-
-            state_stack = chess_utils.create_state_stacks(
-                games_str, config.custom_board_state_function, games_skill
-            )
-            # state_stack = state_stack[:, pos_start:pos_end, :, :]
-            # logger.debug(state_stack.shape)
-            # Initialize a list to hold the indexed state stacks
-            indexed_state_stacks = []
-
-            for batch_idx in range(batch_size):
-                # Get the indices for the current batch
-                dots_indices_for_batch = games_dots[batch_idx]
-
-                # Index the state_stack for the current batch
-                indexed_state_stack = state_stack[
-                    :, batch_idx, dots_indices_for_batch, :, :
-                ]
-
-                # Append the result to the list
-                indexed_state_stacks.append(indexed_state_stack)
-
-            # Stack the indexed state stacks along the first dimension
-            # This results in a tensor of shape [2, 61, 8, 8] (assuming all batches have 61 indices)
-            state_stack = torch.stack(indexed_state_stacks)
-
-            # Use einops to rearrange the dimensions after stacking
-            state_stack = einops.rearrange(
-                state_stack, "batch modes pos row col -> modes batch pos row col"
+            state_stack_one_hot, resid_post = prepare_data_batch(
+                indices, probe_data, config
             )
 
-            # logger.debug("after indexing state stack shape", state_stack.shape)
-
-            state_stack_one_hot = chess_utils.state_stack_to_one_hot(
-                modes,
-                config.num_rows,
-                config.num_cols,
-                config.min_val,
-                config.max_val,
-                device,
-                state_stack,
-                probe_data.user_state_dict_one_hot_mapping,
-            ).to(device)
-
-            # logger.debug(state_stack_one_hot.shape)
-            _, cache = probe_data.model.run_with_cache(
-                games_int.to(device)[:, :-1], return_type=None
+            loss, accuracy = linear_probe_forward_pass(
+                linear_probe, state_stack_one_hot, resid_post, one_hot_range
             )
-            resid_post = cache["resid_post", layer][:, :]
-            # Initialize a list to hold the indexed state stacks
-            indexed_resid_posts = []
-
-            for batch_idx in range(games_dots.size(0)):
-                # Get the indices for the current batch
-                dots_indices_for_batch = games_dots[batch_idx]
-
-                # Index the state_stack for the current batch
-                indexed_resid_post = resid_post[batch_idx, dots_indices_for_batch]
-
-                # Append the result to the list
-                indexed_resid_posts.append(indexed_resid_post)
-
-            # Stack the indexed state stacks along the first dimension
-            # This results in a tensor of shape [2, 61, 8, 8] (assuming all batches have 61 indices)
-            resid_post = torch.stack(indexed_resid_posts)
-            # logger.debug("Resid post", resid_post.shape)
-            probe_out = einsum(
-                "batch pos d_model, modes d_model rows cols options -> modes batch pos rows cols options",
-                resid_post,
-                linear_probe,
-            )
-            logger.debug(
-                f"probe_out: {probe_out.shape},state_stack_one_hot: {state_stack_one_hot.shape},state_stack: {state_stack.shape}"
-            )
-
-            assert probe_out.shape == state_stack_one_hot.shape
-
-            accuracy = (
-                (probe_out[0].argmax(-1) == state_stack_one_hot[0].argmax(-1))
-                .float()
-                .mean()
-            )
-
-            probe_log_probs = probe_out.log_softmax(-1)
-            probe_correct_log_probs = (
-                einops.reduce(
-                    probe_log_probs * state_stack_one_hot,
-                    "modes batch pos rows cols options -> modes pos rows cols",
-                    "mean",
-                )
-                * one_hot_range
-            )  # Multiply to correct for the mean over one_hot_range
-            loss = -probe_correct_log_probs[0, :].mean(0).sum()
-
-            if i % 100 == 0:
-                logger.info(f"batch {i}, acc {accuracy}, loss {loss}")
-
-            current_iter += batch_size
 
             accuracy_list.append(accuracy)
-            # probe_out_list.append(probe_out)
-            # state_stack_one_hot_list.append(state_stack_one_hot)
             loss_list.append(loss)
+
+            if i % 100 == 0:
+                average_accuracy = sum(accuracy_list) / len(accuracy_list)
+                logger.info(
+                    f"batch {i}, average accuracy: {average_accuracy}, acc {accuracy}, loss {loss}"
+                )
+
+            current_iter += batch_size
     data = {
         "accuracy": accuracy_list,
-        # "probe_out": probe_out_list,
-        # "state_stack_one_hot": state_stack_one_hot_list,
         "loss": loss_list,
     }
 
@@ -807,7 +783,7 @@ def find_config_by_name(config_name: str) -> Config:
     raise ValueError(f"Config with name {config_name} not found")
 
 
-RUN_TEST_SET = True  # If True, we will test the probes on the test set. If False, we will train the probes on the train set
+RUN_TEST_SET = False  # If True, we will test the probes on the test set. If False, we will train the probes on the train set
 USE_PIECE_BOARD_STATE = True  # We will test or train a probe for piece board state
 # If USE_PIECE_BOARD_STATE is False, we will test or train a probe on predicting player ELO
 
@@ -860,6 +836,9 @@ if __name__ == "__main__":
                 n_layers = state_dict["n_layers"]
 
                 split = "test"
+
+                assert split == "test", "Don't test on the train set"
+
                 input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
                 config = set_config_min_max_vals_and_column_name(
                     config, input_dataframe_file, dataset_prefix
@@ -894,9 +873,12 @@ if __name__ == "__main__":
         # When training a probe, you have to set all parameters such as model name, dataset prefix, etc.
         dataset_prefix = "lichess_"
         # dataset_prefix = "stockfish_"
-        layer = 12
+        layer = 5
         split = "train"
-        n_layers = 16
+
+        assert split == "train", "Don't train on the test set"
+
+        n_layers = 8
         model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
         # model_name = "tf_lens_lichess_16layers_ckpt_no_optimizer"
         # config.levels_of_interest = [0, 5] # NOTE: If training for skill, you should uncomment this line for good results
@@ -921,4 +903,7 @@ if __name__ == "__main__":
             model_name,
             config,
         )
-        train_linear_probe_cross_entropy(probe_data, config, misc_logging_dict)
+        for i in [0.01, 0.001, 0.0001]:
+            max_lr = i
+            min_lr = i
+            train_linear_probe_cross_entropy(probe_data, config, misc_logging_dict)
