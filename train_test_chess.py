@@ -68,9 +68,7 @@ num_epochs = 5
 modes = 1  # This variable currently doesn't do anything, but it is used and adds a dimension to the tensors
 # In the future, modes could be used to do clever things like training multiple probes at once, such as a black piece probe and a white piece probe
 wd = 0.01
-max_lr = 0.01
-min_lr = max_lr / 10
-min_lr = max_lr
+lr = 0.001
 decay_lr = True
 
 # meta is used to encode the string pgn strings into integer sequences
@@ -243,28 +241,6 @@ def get_custom_indices(
     return custom_indices
 
 
-def get_lr(current_iter: int, max_iters: int, max_lr: float, min_lr: float) -> float:
-    """
-    Calculate the learning rate using linear decay.
-
-    Args:
-    - current_iter (int): The current iteration.
-    - max_iters (int): The total number of iterations for decay.
-    - lr (float): The initial learning rate.
-    - min_lr (float): The minimum learning rate after decay.
-
-    Returns:
-    - float: The calculated learning rate.
-    """
-    # Ensure current_iter does not exceed max_iters
-    current_iter = min(current_iter, max_iters)
-
-    # Calculate the linearly decayed learning rate
-    decayed_lr = max_lr - (max_lr - min_lr) * (current_iter / max_iters)
-
-    return decayed_lr
-
-
 def prepare_data_batch(
     indices: torch.Tensor, probe_data: LinearProbeData, config: Config
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -395,7 +371,7 @@ def estimate_loss(
     config: Config,
     one_hot_range: int,
 ) -> dict[str, dict[str, float]]:
-    out = {}
+    out = {"train": {"loss": 0, "accuracy": 0}, "val": {"loss": 0, "accuracy": 0}}
     # val_games may be less than 100, so we need to make sure we don't evaluate more than val_games
     eval_iters = min((100 // batch_size) * batch_size, val_games)
 
@@ -458,8 +434,7 @@ def train_linear_probe_cross_entropy(
     linear_probe.requires_grad = True
     logger.info(f"linear_probe shape: {linear_probe.shape}")
 
-    lr = max_lr
-    linear_probe_name = f"{PROBE_DIR}{model_name}_{config.linear_probe_name}_layer_{probe_data.layer}_max_lr_{max_lr}_min_lr_{min_lr}.pth"
+    linear_probe_name = f"{PROBE_DIR}{model_name}_{config.linear_probe_name}_layer_{probe_data.layer}_lr_{lr}.pth"
     optimiser = torch.optim.AdamW(
         [linear_probe], lr=lr, betas=(0.9, 0.99), weight_decay=wd
     )
@@ -486,7 +461,7 @@ def train_linear_probe_cross_entropy(
         "layer": probe_data.layer,
         "indexing_function_name": indexing_function_name,
         "batch_size": batch_size,
-        "max_lr": max_lr,
+        "lr": lr,
         "wd": wd,
         "split": split,
         "pos_start": config.pos_start,
@@ -517,9 +492,6 @@ def train_linear_probe_cross_entropy(
     for epoch in range(num_epochs):
         full_train_indices = torch.randperm(train_games)
         for i in tqdm(range(0, train_games, batch_size)):
-            lr = get_lr(current_iter, max_iters, max_lr, min_lr) if decay_lr else lr
-            for param_group in optimiser.param_groups:
-                param_group["lr"] = lr
 
             indices = full_train_indices[i : i + batch_size]
 
@@ -701,7 +673,7 @@ def test_linear_probe_cross_entropy(
         "layer": probe_data.layer,
         "indexing_function_name": indexing_function_name,
         "batch_size": batch_size,
-        "max_lr": max_lr,
+        "lr": lr,
         "wd": wd,
         "split": split,
         "pos_start": config.pos_start,
@@ -903,7 +875,4 @@ if __name__ == "__main__":
             model_name,
             config,
         )
-        for i in [0.01, 0.001, 0.0001]:
-            max_lr = i
-            min_lr = i
-            train_linear_probe_cross_entropy(probe_data, config, misc_logging_dict)
+        train_linear_probe_cross_entropy(probe_data, config, misc_logging_dict)
