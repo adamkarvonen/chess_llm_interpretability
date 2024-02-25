@@ -48,7 +48,7 @@ DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 SAVED_PROBE_DIR = "linear_probes/saved_probes/"
 WANDB_PROJECT = "chess_linear_probes"
-BATCH_SIZE = 1
+BATCH_SIZE = 4
 
 device = (
     "cuda"
@@ -58,7 +58,7 @@ device = (
 logger.info(f"Using device: {device}")
 
 
-wandb_logging = True
+wandb_logging = False
 os.environ["WANDB_MODE"] = "online"
 
 # meta is used to encode the string pgn strings into integer sequences
@@ -432,7 +432,7 @@ def estimate_loss(
     for split in split_indices:
         losses = torch.zeros(eval_iters)
         accuracies = torch.zeros(eval_iters)
-        for k in range(eval_iters):
+        for k in range(0, eval_iters, BATCH_SIZE):
             indices = split_indices[split][k : k + BATCH_SIZE]
 
             state_stack_one_hot, resid_post = prepare_data_batch(
