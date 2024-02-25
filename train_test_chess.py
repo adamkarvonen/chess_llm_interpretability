@@ -48,7 +48,7 @@ DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 SAVED_PROBE_DIR = "linear_probes/saved_probes/"
 WANDB_PROJECT = "chess_linear_probes"
-BATCH_SIZE = 4
+BATCH_SIZE = 1
 
 device = (
     "cuda"
@@ -58,7 +58,7 @@ device = (
 logger.info(f"Using device: {device}")
 
 
-wandb_logging = False
+wandb_logging = True
 os.environ["WANDB_MODE"] = "online"
 
 # meta is used to encode the string pgn strings into integer sequences
@@ -112,9 +112,9 @@ class Config:
     levels_of_interest: Optional[list[int]] = None
     column_name: str = None
     probing_for_skill: bool = False
-    pos_start: int = (
-        5  # indexes into custom_indexing_function. Example: if pos_start = 25, for find_dots_indices, selects everything after the first 25 moves
-    )
+    pos_start: int = 0
+    # pos_start indexes into custom_indexing_function. Example: if pos_start = 25, for find_dots_indices, selects everything after the first 25 moves
+    
 
 
 piece_config = Config(
