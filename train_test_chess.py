@@ -201,6 +201,8 @@ def process_dataframe(
         df = df[df[config.column_name].isin(matches)]
         logger.info(f"Number of games in filtered dataset: {len(df)}")
 
+        df = df.reset_index(drop=True)
+
     return user_state_dict_one_hot_mapping, df
 
 
