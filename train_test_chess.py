@@ -52,7 +52,7 @@ DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 SAVED_PROBE_DIR = "linear_probes/saved_probes/"
 WANDB_PROJECT = "chess_linear_probes"
-BATCH_SIZE = 2
+BATCH_SIZE = 1
 
 device = (
     "cuda"
