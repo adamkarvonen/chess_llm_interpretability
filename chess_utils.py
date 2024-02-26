@@ -6,6 +6,11 @@ import torch
 from torch.nn import functional as F
 from typing import Callable, Optional
 
+from jaxtyping import Int, Float, jaxtyped
+from torch import Tensor
+import jaxtyping
+from beartype import beartype
+
 
 # Mapping of chess pieces to integers
 PIECE_TO_INT = {
@@ -132,6 +137,7 @@ def pgn_string_to_board(pgn_string: str) -> chess.Board:
     return board
 
 
+# TODO: I should have kept everything in torch.Tensor format. Would be nice to fix at some point.
 def create_state_stack(
     moves_string: str,
     custom_board_to_state_fn: Callable[[chess.Board], np.ndarray],
@@ -184,7 +190,7 @@ def create_state_stacks(
     moves_strings: list[str],
     custom_board_to_state_fn: Callable[[chess.Board], np.ndarray],
     skill_array: Optional[np.ndarray] = None,
-) -> torch.Tensor:
+) -> Int[Tensor, "modes sample_size pgn_str_length rows cols"]:
     """Given a list of strings of PGN format moves, create a tensor of shape (len(moves_strings), 8, 8).
     custom_board_to_state is a function that takes a chess.Board object and returns a 8x8 np.ndarray for
     board state, or 1x1 for centipawn advantage."""
@@ -215,7 +221,7 @@ def state_stack_to_one_hot(
     device: torch.device,
     state_stack: np.ndarray,
     user_mapping: Optional[dict[int, int]] = None,
-) -> torch.Tensor:
+) -> Int[Tensor, "modes sample_size num_white_moves rows cols one_hot_range"]:
     """Input shape: assert(state_stacks_all_chars.shape) == (modes, sample_size, game_length, rows, cols)
     Output shape: assert(state_stacks_one_hot.shape) == (modes, sample_size, game_length, rows, cols, one_hot_range)
     """

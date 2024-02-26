@@ -50,7 +50,7 @@ DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 SAVED_PROBE_DIR = "linear_probes/saved_probes/"
 WANDB_PROJECT = "chess_linear_probes"
-BATCH_SIZE = 1
+BATCH_SIZE = 2
 
 device = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -298,17 +298,15 @@ def get_custom_indices(
 def prepare_data_batch(
     indices: Int[Tensor, "batch_size"], probe_data: LinearProbeData, config: Config
 ) -> tuple[
-    Int[Tensor, "modes, batch_size, num_white_moves, num_rows, num_cols, num_options"],
-    Float[Tensor, "batch_size, num_white_moves, d_model"],
+    Int[Tensor, "modes batch_size num_white_moves num_rows num_cols num_options"],
+    Float[Tensor, "batch_size num_white_moves d_model"],
 ]:
     list_of_indices = indices.tolist()  # For indexing into the board_seqs_string list of strings
-    # games_int shape (batch_size, pgn_str_length)
-    games_int = probe_data.board_seqs_int[indices]
+    games_int = probe_data.board_seqs_int[indices]  # games_int shape (batch_size, pgn_str_length)
     games_str = [probe_data.board_seqs_string[idx] for idx in list_of_indices]
     games_str = [s[:] for s in games_str]
     games_dots = probe_data.custom_indices[indices]
-    # games_dots shape (batch_size, num_white_moves)
-    games_dots = games_dots[:, config.pos_start :]
+    games_dots = games_dots[:, config.pos_start :]  # games_dots shape (batch_size, num_white_moves)
 
     if config.probing_for_skill:
         games_skill = probe_data.skill_stack[indices]  # games_skill shape (batch_size,)
@@ -377,18 +375,19 @@ def prepare_data_batch(
     return state_stack_one_hot, resid_post
 
 
+@jaxtyped(typechecker=beartype)
 def linear_probe_forward_pass(
-    linear_probe: torch.Tensor,
-    state_stack_one_hot: torch.Tensor,
-    resid_post: torch.Tensor,
+    linear_probe: Float[Tensor, "modes d_model rows cols options"],
+    state_stack_one_hot: Int[Tensor, "modes batch num_white_moves rows cols options"],
+    resid_post: Float[Tensor, "batch num_white_moves d_model"],
     one_hot_range: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[Tensor, Tensor]:
+    """Outputs are scalar tensors."""
     probe_out = einsum(
         "batch pos d_model, modes d_model rows cols options -> modes batch pos rows cols options",
         resid_post,
         linear_probe,
     )
-    logger.debug(f"probe_out: {probe_out.shape},state_stack_one_hot: {state_stack_one_hot.shape}")
 
     assert probe_out.shape == state_stack_one_hot.shape
 
@@ -403,6 +402,7 @@ def linear_probe_forward_pass(
         )
         * one_hot_range
     )  # Multiply to correct for the mean over one_hot_range
+    # probe_correct_log_probs shape (modes, num_white_moves, num_rows, num_cols)
     loss = -probe_correct_log_probs[0, :].mean(0).sum()
 
     return loss, accuracy
@@ -415,7 +415,7 @@ def linear_probe_forward_pass(
 def estimate_loss(
     train_games: int,
     val_games: int,
-    linear_probe: torch.Tensor,
+    linear_probe: Float[Tensor, "modes d_model rows cols options"],
     probe_data: LinearProbeData,
     config: Config,
     one_hot_range: int,
@@ -512,7 +512,7 @@ def train_linear_probe_cross_entropy(
         full_train_indices = torch.randperm(train_games)
         for i in tqdm(range(0, train_games, BATCH_SIZE)):
 
-            indices = full_train_indices[i : i + BATCH_SIZE]
+            indices = full_train_indices[i : i + BATCH_SIZE]  # shape batch_size
 
             state_stack_one_hot, resid_post = prepare_data_batch(indices, probe_data, config)
 
@@ -684,7 +684,7 @@ def test_linear_probe_cross_entropy(
     with torch.inference_mode():
         full_test_indices = torch.arange(0, num_games)
         for i in tqdm(range(0, num_games, BATCH_SIZE)):
-            indices = full_test_indices[i : i + BATCH_SIZE]
+            indices = full_test_indices[i : i + BATCH_SIZE]  # shape batch_size
 
             state_stack_one_hot, resid_post = prepare_data_batch(indices, probe_data, config)
 
@@ -737,7 +737,7 @@ def find_config_by_name(config_name: str) -> Config:
 
 
 RUN_TEST_SET = False  # If True, we will test the probes on the test set. If False, we will train the probes on the train set
-USE_PIECE_BOARD_STATE = False  # We will test or train a probe for piece board state
+USE_PIECE_BOARD_STATE = True  # We will test or train a probe for piece board state
 # If USE_PIECE_BOARD_STATE is False, we will test or train a probe on predicting player ELO
 
 # If training a probe, make sure to set the below parameters in the else block
