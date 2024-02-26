@@ -34,19 +34,21 @@ else:
 logging.basicConfig(level=log_level)
 logger = logging.getLogger(__name__)
 
+GPT_LAYER_COUNT = 8
 MODEL_DIR = "models/"
 DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
-SAVED_PROBE_DIR = "linear_probes/8layer_piece_probe_sweep/"
+MODEL_PREFIX = "lichess_"
+# MODEL_PREFIX = ""
+SAVED_PROBE_DIR = f"linear_probes/{MODEL_PREFIX}{GPT_LAYER_COUNT}layer_piece_probe_sweep/"
 RECORDING_DIR = "intervention_logs/"
 SPLIT = "test"
 MODES = 1  # Currently only supporting 1 mode so this is fairly unnecessary
-START_POS = 5
+START_POS = 0
 END_POS = 30
 BLANK_INDEX = chess_utils.PIECE_TO_ONE_HOT_MAPPING[0]
 SAMPLING_MOVES = 5
 TEMPERATURE = 1.0
-GPT_LAYER_COUNT = 8
 
 device = (
     "cuda"
@@ -518,6 +520,8 @@ def perform_board_interventions(
 
             move_counters.orig_model_tracker.orig_board_argmax_legal_total += 1
 
+            print(f"\nargmax_model_move: {argmax_model_move}\n")
+
             # Step 4: Determine which piece was moved from which source square
             moved_piece = orig_board.piece_at(model_move_san.from_square)
             moved_piece_int = chess_utils.PIECE_TO_INT[moved_piece.piece_type]
@@ -620,8 +624,9 @@ def perform_board_interventions(
 
                     if layer < GPT_LAYER_COUNT:
                         # We want to intervene on multiple positions in the sequence because a move is multiple tokens
+                        # scale *= 0.5
                         resid[:, :] -= scale * flip_dir
-
+                        # resid[:, move_of_interest_index] -= scale * flip_dir
                     coeff = (
                         resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
                     )
@@ -642,6 +647,8 @@ def perform_board_interventions(
                 modified_board_argmax_model_move = chess_utils.get_model_move(
                     probe_data.model, META, model_input, temperature=0.0
                 )
+
+                print(f"\nModified board argmax model move: {modified_board_argmax_model_move}\n")
 
                 # Step 6.1: Sample n moves from the modified model
                 # Track how many moves were legal on the modified board
@@ -723,9 +730,10 @@ scales_lookup = {
 }
 
 scales_lookup = {
-    InterventionType.SINGLE_SCALE: [1.1, 1.2, 1.3],
+    # InterventionType.SINGLE_SCALE: [0.5, 0.75, 1.0, 1.2],
+    InterventionType.SINGLE_SCALE: [1.1],
     InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
-    InterventionType.SINGLE_TARGET: [-9, -10, -11],
+    InterventionType.SINGLE_TARGET: [-7, -10, -13],
 }
 
 # scales_lookup = {
@@ -737,17 +745,18 @@ scales_lookup = {
 intervention_types = [
     InterventionType.SINGLE_SCALE,
     # InterventionType.AVERAGE_TARGET,
-    InterventionType.SINGLE_TARGET,
+    # InterventionType.SINGLE_TARGET,
 ]
 
 sampling_type = SamplingType.BOTH
 
-num_games = 4
+num_games = 8
 
 for intervention_type in intervention_types:
 
+
     probe_names = {}
-    first_layer = 2
+    first_layer = 3
     last_layer = 6
 
     # The last layer in the model has an average empty value about 2x of all other layers
@@ -757,7 +766,7 @@ for intervention_type in intervention_types:
 
     for i in range(first_layer, last_layer + 1):
         probe_names[i] = (
-            f"tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_{i}.pth"
+            f"tf_lens_lichess_{GPT_LAYER_COUNT}layers_ckpt_no_optimizer_chess_piece_probe_layer_{i}.pth"
         )
     probe_data = get_probe_data(probe_names[first_layer], num_games)
 
@@ -766,7 +775,7 @@ for intervention_type in intervention_types:
 
     scales = scales_lookup[intervention_type]
 
-    recording_name = f"sampling={sampling_type.value}_intervention_type={intervention_type.value}_first_layer={first_layer}_last_layer={last_layer}_p={piece_coe}_b={blank_coe}_scales="
+    recording_name = f"sampling={sampling_type.value}_n_layers={GPT_LAYER_COUNT}_intervention_type={intervention_type.value}_first_layer={first_layer}_last_layer={last_layer}_p={piece_coe}_b={blank_coe}_scales="
     for scale in scales:
         recording_name += f"{str(scale).replace('.', '')[:5]}_"
 
