@@ -40,9 +40,7 @@ else:
 # Add handler to this logger if not already present
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
@@ -55,9 +53,7 @@ WANDB_PROJECT = "chess_linear_probes"
 BATCH_SIZE = 1
 
 device = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "mps" if torch.backends.mps.is_available() else "cpu"
+    "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 )
 logger.info(f"Using device: {device}")
 
@@ -305,9 +301,7 @@ def prepare_data_batch(
     Int[Tensor, "modes, batch_size, num_white_moves, num_rows, num_cols, num_options"],
     Float[Tensor, "batch_size, num_white_moves, d_model"],
 ]:
-    list_of_indices = (
-        indices.tolist()
-    )  # For indexing into the board_seqs_string list of strings
+    list_of_indices = indices.tolist()  # For indexing into the board_seqs_string list of strings
     # games_int shape (batch_size, pgn_str_length)
     games_int = probe_data.board_seqs_int[indices]
     games_str = [probe_data.board_seqs_string[idx] for idx in list_of_indices]
@@ -360,9 +354,7 @@ def prepare_data_batch(
     )  # shape (modes, batch_size, num_white_moves, num_rows, num_cols, num_options)
 
     with torch.inference_mode():
-        _, cache = probe_data.model.run_with_cache(
-            games_int.to(device)[:, :-1], return_type=None
-        )
+        _, cache = probe_data.model.run_with_cache(games_int.to(device)[:, :-1], return_type=None)
         resid_post = cache["resid_post", probe_data.layer][
             :, :
         ]  # shape (batch_size, pgn_str_length - 1, d_model)
@@ -380,9 +372,7 @@ def prepare_data_batch(
         indexed_resid_posts.append(indexed_resid_post)
 
     # Stack the indexed state stacks along the first dimension
-    resid_post = torch.stack(
-        indexed_resid_posts
-    )  # shape (batch_size, num_white_moves, d_model)
+    resid_post = torch.stack(indexed_resid_posts)  # shape (batch_size, num_white_moves, d_model)
 
     return state_stack_one_hot, resid_post
 
@@ -398,15 +388,11 @@ def linear_probe_forward_pass(
         resid_post,
         linear_probe,
     )
-    logger.debug(
-        f"probe_out: {probe_out.shape},state_stack_one_hot: {state_stack_one_hot.shape}"
-    )
+    logger.debug(f"probe_out: {probe_out.shape},state_stack_one_hot: {state_stack_one_hot.shape}")
 
     assert probe_out.shape == state_stack_one_hot.shape
 
-    accuracy = (
-        (probe_out[0].argmax(-1) == state_stack_one_hot[0].argmax(-1)).float().mean()
-    )
+    accuracy = (probe_out[0].argmax(-1) == state_stack_one_hot[0].argmax(-1)).float().mean()
 
     probe_log_probs = probe_out.log_softmax(-1)
     probe_correct_log_probs = (
@@ -449,9 +435,7 @@ def estimate_loss(
         for k in range(0, eval_iters, BATCH_SIZE):
             indices = split_indices[split][k : k + BATCH_SIZE]
 
-            state_stack_one_hot, resid_post = prepare_data_batch(
-                indices, probe_data, config
-            )
+            state_stack_one_hot, resid_post = prepare_data_batch(indices, probe_data, config)
 
             loss, accuracy = linear_probe_forward_pass(
                 linear_probe, state_stack_one_hot, resid_post, one_hot_range
@@ -488,7 +472,9 @@ def train_linear_probe_cross_entropy(
     if config.levels_of_interest is not None:
         one_hot_range = len(config.levels_of_interest)
 
-    linear_probe_name = f"{PROBE_DIR}{model_name}_{config.linear_probe_name}_layer_{probe_data.layer}.pth"
+    linear_probe_name = (
+        f"{PROBE_DIR}{model_name}_{config.linear_probe_name}_layer_{probe_data.layer}.pth"
+    )
     linear_probe = torch.randn(
         TRAIN_PARAMS.modes,
         probe_data.model.cfg.d_model,
@@ -528,9 +514,7 @@ def train_linear_probe_cross_entropy(
 
             indices = full_train_indices[i : i + BATCH_SIZE]
 
-            state_stack_one_hot, resid_post = prepare_data_batch(
-                indices, probe_data, config
-            )
+            state_stack_one_hot, resid_post = prepare_data_batch(indices, probe_data, config)
 
             loss, accuracy = linear_probe_forward_pass(
                 linear_probe, state_stack_one_hot, resid_post, one_hot_range
@@ -606,17 +590,13 @@ def construct_linear_probe_data(
     # Checking for foot guns
 
     if dataset_prefix == "lichess_":
-        assert (
-            "stockfish" not in model_name
-        ), "Are you sure you're using the right model?"
+        assert "stockfish" not in model_name, "Are you sure you're using the right model?"
 
     if dataset_prefix == "stockfish_":
         assert "lichess" not in model_name, "Are you sure you're using the right model?"
 
     model = get_transformer_lens_model(model_name, n_layers)
-    user_state_dict_one_hot_mapping, df = process_dataframe(
-        input_dataframe_file, config
-    )
+    user_state_dict_one_hot_mapping, df = process_dataframe(input_dataframe_file, config)
     df = df[:max_games]
     board_seqs_string = get_board_seqs_string(df)
     board_seqs_int = get_board_seqs_int(df)
@@ -706,9 +686,7 @@ def test_linear_probe_cross_entropy(
         for i in tqdm(range(0, num_games, BATCH_SIZE)):
             indices = full_test_indices[i : i + BATCH_SIZE]
 
-            state_stack_one_hot, resid_post = prepare_data_batch(
-                indices, probe_data, config
-            )
+            state_stack_one_hot, resid_post = prepare_data_batch(indices, probe_data, config)
 
             loss, accuracy = linear_probe_forward_pass(
                 linear_probe, state_stack_one_hot, resid_post, one_hot_range
@@ -764,10 +742,10 @@ USE_PIECE_BOARD_STATE = False  # We will test or train a probe for piece board s
 
 # If training a probe, make sure to set the below parameters in the else block
 
-saved_piece_probe_name = "tf_lens_lichess_16layers_ckpt_no_optimizer_chess_piece_probe_layer_12_pos_start_0.pth"
-saved_skill_probe_name = (
-    "tf_lens_lichess_16layers_ckpt_no_optimizer_chess_skill_probe_layer_12.pth"
+saved_piece_probe_name = (
+    "tf_lens_lichess_16layers_ckpt_no_optimizer_chess_piece_probe_layer_12_pos_start_0.pth"
 )
+saved_skill_probe_name = "tf_lens_lichess_16layers_ckpt_no_optimizer_chess_skill_probe_layer_12.pth"
 
 if __name__ == "__main__":
     if RUN_TEST_SET:
