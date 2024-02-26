@@ -13,6 +13,10 @@ import json
 import chess_utils
 import train_test_chess
 
+from jaxtyping import Int, Float, jaxtyped
+from torch import Tensor
+from beartype import beartype
+
 import cProfile
 import pstats
 import io
@@ -143,11 +147,16 @@ def get_probe_data(probe_name: str, num_games: int) -> train_test_chess.LinearPr
         return probe_data
 
 
+@jaxtyped(typechecker=beartype)
 def prepare_intervention_data(
     probe_names: dict[int, str],
     probe_data: train_test_chess.LinearProbeData,
-    sample_size: int,
-) -> tuple[dict, torch.Tensor, torch.Tensor]:
+    num_games: int,
+) -> tuple[
+    dict,
+    Int[Tensor, "modes num_games pgn_str_length rows cols"],
+    Int[Tensor, "num_games num_white_moves"],
+]:
 
     probes = {}
     checkpoint = None  # Going to retain the last checkpoint for the config
@@ -160,22 +169,22 @@ def prepare_intervention_data(
 
     config = train_test_chess.find_config_by_name(checkpoint["config_name"])
     state_stacks_all_chars = chess_utils.create_state_stacks(
-        probe_data.board_seqs_string[:sample_size], config.custom_board_state_function
+        probe_data.board_seqs_string[:num_games], config.custom_board_state_function
     )
     logger.info(f"state_stack shape: {state_stacks_all_chars.shape}")
-    game_length_in_chars = len(probe_data.board_seqs_string[0])
+    pgn_str_length = len(probe_data.board_seqs_string[0])
 
     assert (state_stacks_all_chars.shape) == (
         MODES,
-        sample_size,
-        game_length_in_chars,
+        num_games,
+        pgn_str_length,
         config.num_rows,
         config.num_cols,
     )
 
-    white_move_indices = probe_data.custom_indices[:sample_size]
+    white_move_indices = probe_data.custom_indices[:num_games]
     num_white_moves = white_move_indices.shape[1]
-    assert (white_move_indices.shape) == (sample_size, num_white_moves)
+    assert (white_move_indices.shape) == (num_games, num_white_moves)
 
     return probes, state_stacks_all_chars, white_move_indices
 
@@ -213,11 +222,12 @@ def initialize_scale_tracker(scales: list[float]) -> dict[float, MoveTracker]:
     return scale_tracker
 
 
+@jaxtyped(typechecker=beartype)
 def update_output_tracker_grids(
-    probes: dict[int, torch.Tensor],
+    probes: dict[int, Float[Tensor, "modes d_model rows cols options"]],
     probe_data: train_test_chess.LinearProbeData,
-    model_input: torch.Tensor,
-    state_stacks_all_chars: torch.Tensor,
+    model_input: Int[Tensor, "num_games pgn_str_length"],
+    state_stacks_all_chars: Int[Tensor, "modes num_games pgn_str_length rows cols"],
     output_tracker: dict,
     move_of_interest_index: int,
     sample_index: int,
@@ -331,7 +341,7 @@ def update_move_counters_best_per_move(
 
 def sample_moves_from_model(
     model,
-    model_input: torch.Tensor,
+    model_input: Int[Tensor, "num_games pgn_str_length"],
     original_board: chess.Board,
     modified_board: chess.Board,
 ) -> MoveTracker:
@@ -376,10 +386,13 @@ def check_if_legal_move(board: chess.Board, move: str) -> bool:
         return False
 
 
-def calculate_probe_outputs(probes: dict[int, torch.Tensor], cache) -> dict[int, torch.Tensor]:
+@jaxtyped(typechecker=beartype)
+def calculate_probe_outputs(
+    probes: dict[int, Float[Tensor, "modes d_model rows cols options"]], cache
+) -> dict[int, Float[Tensor, "modes batch num_white_moves rows cols options"]]:
     probe_outputs = {}
     for layer in probes:
-        resid_post = cache["resid_post", layer][:, :]
+        resid_post = cache["resid_post", layer][:, :]  # shape is (batch, pos, d_model)
         linear_probe = probes[layer]
         probe_outputs[layer] = einsum(
             "batch pos d_model, modes d_model rows cols options -> modes batch pos rows cols options",
@@ -389,10 +402,11 @@ def calculate_probe_outputs(probes: dict[int, torch.Tensor], cache) -> dict[int,
     return probe_outputs
 
 
+@jaxtyped(typechecker=beartype)
 def calculate_scale_coefficient(
-    model_activations: torch.Tensor,
-    flip_dir: torch.Tensor,
-    probe: torch.Tensor,
+    model_activations: Float[Tensor, "d_model"],
+    flip_dir: Float[Tensor, "d_model"],
+    probe: Float[Tensor, "modes d_model rows cols options"],
     target: float,
 ) -> float:
     """Find the scale coefficient that will result in the linear probe output being equal to the target value."""
@@ -443,14 +457,14 @@ def average_probe_empty_cell_value(
     return average_cell_values
 
 
-# This is a 300 line function, which I'm not thrilled about. However, every sequential step is only used once in this function.
+# This is a 250 line function, which I'm not thrilled about. However, every sequential step is only used once in this function.
 # I made an initial attempt to break it up into smaller functions, but I found that it made the code harder to follow.
 # I also have limited time to refactor this function, so I'm leaving it as is for now.
 # There is a lot going on here, but it's all necessary.
 def perform_board_interventions(
     probe_names: dict[int, str],
     probe_data: train_test_chess.LinearProbeData,
-    sample_size: int,
+    num_games: int,
     intervention_type: InterventionType,
     sampling_type: SamplingType,
     recording_name: str,
@@ -460,8 +474,12 @@ def perform_board_interventions(
     scales: list[float] = [0.1],
 ):
     probes, state_stacks_all_chars, white_move_indices = prepare_intervention_data(
-        probe_names, probe_data, sample_size
+        probe_names, probe_data, num_games
     )
+    # probes is a dict of [int: torch.Tensor]
+    # probe is a tensor of shape (modes, d_model, rows, cols, options)
+    # state_stacks_all_chars is a tensor of shape (modes, num_games, pgn_str_length, rows, cols)
+    # white_move_indices is a tensor of shape (num_games, num_white_moves)
     scale_tracker = initialize_scale_tracker(scales)
     move_counters = MoveCounters()
 
@@ -473,7 +491,7 @@ def perform_board_interventions(
 
     average_piece_values = {}
 
-    for sample_index in range(sample_size):
+    for sample_index in range(num_games):
         for scale in scales:
             print(
                 f"Scale: {scale}, deterministic count: {scale_tracker[scale].mod_board_argmax_legal_total}, sampled count: {scale_tracker[scale].mod_board_sampled_legal_total}"
@@ -493,6 +511,7 @@ def perform_board_interventions(
             # Step 2: Get the model move at move_of_interest
             # model_input.shape is (1, move_of_interest_index + 1)
             model_input = chess_utils.encode_string(META, pgn_string)
+            # model input shape: (1, pgn_str_length)
             model_input = torch.tensor(model_input).unsqueeze(0).to(device)
             argmax_model_move = chess_utils.get_model_move(
                 probe_data.model, META, model_input, temperature=0.0
