@@ -16,6 +16,10 @@ import pickle
 import os
 import logging
 from typing import Optional
+from jaxtyping import Int, Float, jaxtyped
+from torch import Tensor
+import jaxtyping
+from beartype import beartype
 
 import chess_utils
 
@@ -48,7 +52,7 @@ DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 SAVED_PROBE_DIR = "linear_probes/saved_probes/"
 WANDB_PROJECT = "chess_linear_probes"
-BATCH_SIZE = 1
+BATCH_SIZE = 2
 
 device = (
     "cuda"
@@ -58,7 +62,7 @@ device = (
 logger.info(f"Using device: {device}")
 
 
-wandb_logging = True
+wandb_logging = False
 os.environ["WANDB_MODE"] = "online"
 
 # meta is used to encode the string pgn strings into integer sequences
@@ -114,7 +118,6 @@ class Config:
     probing_for_skill: bool = False
     pos_start: int = 0
     # pos_start indexes into custom_indexing_function. Example: if pos_start = 25, for find_dots_indices, selects everything after the first 25 moves
-    
 
 
 piece_config = Config(
@@ -263,7 +266,8 @@ def get_board_seqs_string(df: pd.DataFrame) -> list[str]:
     return board_seqs_string
 
 
-def get_board_seqs_int(df: pd.DataFrame) -> torch.tensor:
+@jaxtyped(typechecker=beartype)
+def get_board_seqs_int(df: pd.DataFrame) -> Int[Tensor, "num_games pgn_str_length"]:
     encoded_df = df["transcript"].apply(encode)
     logger.info(encoded_df.head())
     board_seqs_int = torch.tensor(encoded_df.apply(list).tolist())
@@ -274,7 +278,8 @@ def get_board_seqs_int(df: pd.DataFrame) -> torch.tensor:
 # %%
 
 
-def get_skill_stack(config: Config, df: pd.DataFrame) -> torch.tensor:
+@jaxtyped(typechecker=beartype)
+def get_skill_stack(config: Config, df: pd.DataFrame) -> Int[Tensor, "num_games"]:
     skill_levels_list = df[config.column_name].tolist()
 
     skill_stack = torch.tensor(skill_levels_list)
@@ -283,41 +288,42 @@ def get_skill_stack(config: Config, df: pd.DataFrame) -> torch.tensor:
     return skill_stack
 
 
+# @jaxtyped(typechecker=beartype) # typechecking not supported for callable
 def get_custom_indices(
     custom_indexing_function: callable, df: pd.DataFrame
-) -> torch.tensor:
+) -> Int[Tensor, "num_games num_white_moves"]:
     custom_indices = chess_utils.find_custom_indices(custom_indexing_function, df)
     custom_indices = torch.tensor(custom_indices).long()
     logger.info(f"custom_indices shape: {custom_indices.shape}")
     return custom_indices
 
 
+@jaxtyped(typechecker=beartype)
 def prepare_data_batch(
-    indices: torch.Tensor, probe_data: LinearProbeData, config: Config
-) -> tuple[torch.Tensor, torch.Tensor]:
+    indices: Int[Tensor, "batch_size"], probe_data: LinearProbeData, config: Config
+) -> tuple[
+    Int[Tensor, "modes, batch_size, num_white_moves, num_rows, num_cols, num_options"],
+    Float[Tensor, "batch_size, num_white_moves, d_model"],
+]:
     list_of_indices = (
         indices.tolist()
     )  # For indexing into the board_seqs_string list of strings
-    # logger.debug(list_of_indices)
+    # games_int shape (batch_size, pgn_str_length)
     games_int = probe_data.board_seqs_int[indices]
-    games_int = games_int[:, :]
-    # logger.debug(games_int.shape)
     games_str = [probe_data.board_seqs_string[idx] for idx in list_of_indices]
     games_str = [s[:] for s in games_str]
     games_dots = probe_data.custom_indices[indices]
+    # games_dots shape (batch_size, num_white_moves)
     games_dots = games_dots[:, config.pos_start :]
-    # logger.debug(games_dots.shape)
 
     if config.probing_for_skill:
-        games_skill = probe_data.skill_stack[indices]
-        # logger.debug(games_skill.shape)
+        games_skill = probe_data.skill_stack[indices]  # games_skill shape (batch_size,)
     else:
         games_skill = None
 
     state_stack = chess_utils.create_state_stacks(
         games_str, config.custom_board_state_function, games_skill
-    )
-    # logger.debug(state_stack.shape)
+    )  # shape (modes, batch_size, pgn_str_length, num_rows, num_cols)
     indexed_state_stacks = []
 
     for batch_idx in range(BATCH_SIZE):
@@ -331,14 +337,14 @@ def prepare_data_batch(
         indexed_state_stacks.append(indexed_state_stack)
 
     # Stack the indexed state stacks along the first dimension
-    state_stack = torch.stack(indexed_state_stacks)
+    state_stack = torch.stack(
+        indexed_state_stacks
+    )  # shape (batch_size, modes, num_white_moves, num_rows, num_cols)
 
     # Use einops to rearrange the dimensions after stacking
     state_stack = einops.rearrange(
         state_stack, "batch modes pos row col -> modes batch pos row col"
-    )
-
-    # logger.debug("after indexing state stack shape", state_stack.shape)
+    )  # shape (modes, batch_size, num_white_moves, num_rows, num_cols)
 
     state_stack_one_hot = chess_utils.state_stack_to_one_hot(
         TRAIN_PARAMS.modes,
@@ -349,14 +355,17 @@ def prepare_data_batch(
         device,
         state_stack,
         probe_data.user_state_dict_one_hot_mapping,
-    ).to(device)
+    ).to(
+        device
+    )  # shape (modes, batch_size, num_white_moves, num_rows, num_cols, num_options)
 
-    # logger.debug(state_stack_one_hot.shape)
     with torch.inference_mode():
         _, cache = probe_data.model.run_with_cache(
             games_int.to(device)[:, :-1], return_type=None
         )
-        resid_post = cache["resid_post", probe_data.layer][:, :]
+        resid_post = cache["resid_post", probe_data.layer][
+            :, :
+        ]  # shape (batch_size, pgn_str_length - 1, d_model)
     # Initialize a list to hold the indexed state stacks
     indexed_resid_posts = []
 
@@ -371,8 +380,9 @@ def prepare_data_batch(
         indexed_resid_posts.append(indexed_resid_post)
 
     # Stack the indexed state stacks along the first dimension
-    resid_post = torch.stack(indexed_resid_posts)
-    # logger.debug("Resid post", resid_post.shape)
+    resid_post = torch.stack(
+        indexed_resid_posts
+    )  # shape (batch_size, num_white_moves, d_model)
 
     return state_stack_one_hot, resid_post
 
@@ -615,10 +625,10 @@ def construct_linear_probe_data(
         skill_stack = get_skill_stack(config, df)
     custom_indices = get_custom_indices(config.custom_indexing_function, df)
 
-    game_length_in_chars = len(board_seqs_string[0])
+    pgn_str_length = len(board_seqs_string[0])
     num_games = len(board_seqs_string)
 
-    assert board_seqs_int.shape == (num_games, game_length_in_chars)
+    assert board_seqs_int.shape == (num_games, pgn_str_length)
 
     if skill_stack is not None:
         assert skill_stack.shape == (num_games,)
@@ -749,7 +759,7 @@ def find_config_by_name(config_name: str) -> Config:
 
 
 RUN_TEST_SET = False  # If True, we will test the probes on the test set. If False, we will train the probes on the train set
-USE_PIECE_BOARD_STATE = True  # We will test or train a probe for piece board state
+USE_PIECE_BOARD_STATE = False  # We will test or train a probe for piece board state
 # If USE_PIECE_BOARD_STATE is False, we will test or train a probe on predicting player ELO
 
 # If training a probe, make sure to set the below parameters in the else block
