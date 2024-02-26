@@ -413,6 +413,8 @@ def linear_probe_forward_pass(
 
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
+# This is mainly useful for checking that the probe isn't overfitting to the train set
+# Note that I'm not doing a proper train/val split here, this was just a quick and dirty way to check for overfitting
 @torch.no_grad()
 def estimate_loss(
     train_games: int,
@@ -444,8 +446,8 @@ def estimate_loss(
             loss, accuracy = linear_probe_forward_pass(
                 linear_probe, state_stack_one_hot, resid_post, one_hot_range
             )
-            losses[k] = loss.item()
-            accuracies[k] = accuracy.item()
+            losses[k : k + BATCH_SIZE] = loss.item()
+            accuracies[k : k + BATCH_SIZE] = accuracy.item()
         out[split]["loss"] = losses.mean()
         out[split]["accuracy"] = accuracies.mean()
     return out
@@ -702,8 +704,8 @@ def test_linear_probe_cross_entropy(
                 linear_probe, state_stack_one_hot, resid_post, one_hot_range
             )
 
-            accuracy_list.append(accuracy)
-            loss_list.append(loss)
+            accuracy_list.append(accuracy.item())
+            loss_list.append(loss.item())
 
             if i % 100 == 0:
                 average_accuracy = sum(accuracy_list) / len(accuracy_list)
@@ -788,7 +790,6 @@ if __name__ == "__main__":
                 layer = state_dict["layer"]
                 model_name = state_dict["model_name"]
                 dataset_prefix = state_dict["dataset_prefix"]
-                process_data = state_dict["process_data"]
                 column_name = state_dict["column_name"]
                 config.pos_start = state_dict["pos_start"]
                 levels_of_interest = None
