@@ -305,6 +305,18 @@ def find_even_spaces_indices(moves_string: str) -> list[int]:
     even_indices = indices[::2]
     return even_indices
 
+def find_dots_indices_offset_one(moves_string: str) -> list[int]:
+    """Returns a list of ints of indices of every '.' in the string.
+    This will hopefully provide a reasonable starting point for training a linear probe.
+    """
+    indices = [index for index, char in enumerate(moves_string) if char == "."]
+
+    incremented_indices = [
+        index + 1 for index in indices if index + 1 < len(moves_string)
+    ]
+
+    return incremented_indices
+
 
 def find_even_indices_offset_one(moves_string: str) -> list[int]:
     """
