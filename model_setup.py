@@ -2,26 +2,17 @@
 import torch
 import einops
 
-import transformer_lens
 import transformer_lens.utils as utils
-from transformer_lens.hook_points import (
-    HookedRootModule,
-    HookPoint,
-)  # Hooking utilities
 from transformer_lens import (
     HookedTransformer,
     HookedTransformerConfig,
-    FactoredMatrix,
-    ActivationCache,
 )
 
 import os
 
-### BEGIN MODEL SETUP ###
 # Our pytorch model is in the nanogpt format. For easy linear probing of the residual stream, we want to convert
 # it to the transformer lens format. This is done in the following code block.
 # This code was developed using Neel Nanda's othello_reference/Othello_GPT.ipynb as a reference.
-# Once again, I just copy pasted the relevant cells into here for convenience. Sorry for the messiness.
 
 torch.set_grad_enabled(False)
 
@@ -31,10 +22,10 @@ device = "cpu"
 
 MODEL_DIR = "models/"
 
-model_name = "lichess_16layers_ckpt_no_optimizer.pt"
-
 n_heads = 8
-n_layers = 16  # NOTE: This is pretty janky. You can infer the number of layers from the model name, so use that to set this.
+n_layers = 8
+
+model_name = f"lichess_{n_layers}layers_ckpt_no_optimizer.pt"
 
 assert str(n_layers) in model_name
 
@@ -53,9 +44,7 @@ model_state = checkpoint["model"]
 #     print(key, value.shape)
 
 
-def convert_nanogpt_weights(
-    old_state_dict, cfg: HookedTransformerConfig, bias: bool = False
-):
+def convert_nanogpt_weights(old_state_dict, cfg: HookedTransformerConfig, bias: bool = False):
     """For https://github.com/karpathy/nanoGPT
     There are two complications with converting nanogpt models:
     The first is that some state dicts have an unwanted prefix on keys that needs to be removed.
@@ -73,9 +62,7 @@ def convert_nanogpt_weights(
     new_state_dict["embed.W_E"] = old_state_dict["transformer.wte.weight"]
 
     new_state_dict["ln_final.w"] = old_state_dict["transformer.ln_f.weight"]
-    new_state_dict["ln_final.b"] = torch.zeros_like(
-        old_state_dict["transformer.ln_f.weight"]
-    )
+    new_state_dict["ln_final.b"] = torch.zeros_like(old_state_dict["transformer.ln_f.weight"])
     new_state_dict["unembed.W_U"] = old_state_dict["lm_head.weight"].T
 
     if bias:
@@ -84,16 +71,12 @@ def convert_nanogpt_weights(
     for layer in range(cfg.n_layers):
         layer_key = f"transformer.h.{layer}"
 
-        new_state_dict[f"blocks.{layer}.ln1.w"] = old_state_dict[
-            f"{layer_key}.ln_1.weight"
-        ]
+        new_state_dict[f"blocks.{layer}.ln1.w"] = old_state_dict[f"{layer_key}.ln_1.weight"]
         # A bias of zeros is required for folding layer norm
         new_state_dict[f"blocks.{layer}.ln1.b"] = torch.zeros_like(
             old_state_dict[f"{layer_key}.ln_1.weight"]
         )
-        new_state_dict[f"blocks.{layer}.ln2.w"] = old_state_dict[
-            f"{layer_key}.ln_2.weight"
-        ]
+        new_state_dict[f"blocks.{layer}.ln2.w"] = old_state_dict[f"{layer_key}.ln_2.weight"]
         new_state_dict[f"blocks.{layer}.ln2.b"] = torch.zeros_like(
             old_state_dict[f"{layer_key}.ln_2.weight"]
         )
@@ -119,12 +102,8 @@ def convert_nanogpt_weights(
         ].T
 
         if bias:
-            new_state_dict[f"blocks.{layer}.ln1.b"] = old_state_dict[
-                f"{layer_key}.ln_1.bias"
-            ]
-            new_state_dict[f"blocks.{layer}.ln2.b"] = old_state_dict[
-                f"{layer_key}.ln_2.bias"
-            ]
+            new_state_dict[f"blocks.{layer}.ln1.b"] = old_state_dict[f"{layer_key}.ln_1.bias"]
+            new_state_dict[f"blocks.{layer}.ln2.b"] = old_state_dict[f"{layer_key}.ln_2.bias"]
             new_state_dict[f"blocks.{layer}.mlp.b_in"] = old_state_dict[
                 f"{layer_key}.mlp.c_fc.bias"
             ]
@@ -169,9 +148,7 @@ if LOAD_AND_CONVERT_CHECKPOINT:
     model = HookedTransformer(cfg)
     model.to(device)
 
-    model.load_and_process_state_dict(
-        convert_nanogpt_weights(synthetic_checkpoint, cfg)
-    )
+    model.load_and_process_state_dict(convert_nanogpt_weights(synthetic_checkpoint, cfg))
     recorded_model_name = model_name.split(".")[0]
     torch.save(model.state_dict(), f"{MODEL_DIR}tf_lens_{recorded_model_name}.pth")
 
@@ -189,5 +166,3 @@ print(sample_output == model_output)
 # But, I've never seen that happen, so I'm keeping it simple for now. For a more robust test, use the nanogpt_to_transformer_lens.ipynb notebook.
 # This notebook actually runs the sample input through the original nanogpt model, and then through the converted transformer lens model.
 assert torch.all(sample_output == model_output)
-
-### END MODEL SETUP ###
