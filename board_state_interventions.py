@@ -51,9 +51,7 @@ SAMPLING_MOVES = 5
 TEMPERATURE = 1.0
 
 device = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "mps" if torch.backends.mps.is_available() else "cpu"
+    "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 )
 logger.info(f"Using device: {device}")
 
@@ -240,18 +238,12 @@ def update_output_tracker_grids(
         probe_out = probe_outputs[layer]
 
         blank_probe_grid = probe_out[0, 0, move_of_interest_index, :, :, BLANK_INDEX]
-        piece_probe_grid = probe_out[
-            0, 0, move_of_interest_index, :, :, moved_piece_probe_index
-        ]
+        piece_probe_grid = probe_out[0, 0, move_of_interest_index, :, :, moved_piece_probe_index]
 
         blank_probe_out = blank_probe_grid[r, c]
         piece_probe_out = piece_probe_grid[r, c]
-        output_tracker[layer][f"{model_type_str}_blank_grid"].append(
-            blank_probe_grid.to("cpu")
-        )
-        output_tracker[layer][f"{model_type_str}_piece_grid"].append(
-            piece_probe_grid.to("cpu")
-        )
+        output_tracker[layer][f"{model_type_str}_blank_grid"].append(blank_probe_grid.to("cpu"))
+        output_tracker[layer][f"{model_type_str}_piece_grid"].append(piece_probe_grid.to("cpu"))
         output_tracker[layer][f"{model_type_str}_blank_probe"].append(blank_probe_out)
         output_tracker[layer][f"{model_type_str}_piece_probe"].append(piece_probe_out)
         output_tracker[layer][f"{model_type_str}_move"].append(model_move)
@@ -384,9 +376,7 @@ def check_if_legal_move(board: chess.Board, move: str) -> bool:
         return False
 
 
-def calculate_probe_outputs(
-    probes: dict[int, torch.Tensor], cache
-) -> dict[int, torch.Tensor]:
+def calculate_probe_outputs(probes: dict[int, torch.Tensor], cache) -> dict[int, torch.Tensor]:
     probe_outputs = {}
     for layer in probes:
         resid_post = cache["resid_post", layer][:, :]
@@ -439,9 +429,7 @@ def average_probe_empty_cell_value(
         probe_output = probe_outputs[layer]
         target_val = chess_utils.ONE_HOT_TO_PIECE_MAPPING[piece_index]
         probe_state = probe_output[0, 0, move_of_interest_index, :, :, piece_index]
-        value_mask = (
-            state_stacks[0, sample_index, move_of_interest_index, :, :] != target_val
-        )
+        value_mask = state_stacks[0, sample_index, move_of_interest_index, :, :] != target_val
         value_mask = value_mask.to(device)
 
         # Select the relevant values based on the mask
@@ -499,9 +487,7 @@ def perform_board_interventions(
 
             # Step 1: Get the board state at move_of_interest
             move_of_interest_index = white_move_indices[sample_index][move_of_interest]
-            pgn_string = probe_data.board_seqs_string[sample_index][
-                : move_of_interest_index + 1
-            ]
+            pgn_string = probe_data.board_seqs_string[sample_index][: move_of_interest_index + 1]
             orig_board = chess_utils.pgn_string_to_board(pgn_string)
 
             # Step 2: Get the model move at move_of_interest
@@ -525,9 +511,7 @@ def perform_board_interventions(
             # Step 4: Determine which piece was moved from which source square
             moved_piece = orig_board.piece_at(model_move_san.from_square)
             moved_piece_int = chess_utils.PIECE_TO_INT[moved_piece.piece_type]
-            moved_piece_probe_index = chess_utils.PIECE_TO_ONE_HOT_MAPPING[
-                moved_piece_int
-            ]
+            moved_piece_probe_index = chess_utils.PIECE_TO_ONE_HOT_MAPPING[moved_piece_int]
             r, c = chess_utils.square_to_coordinate(model_move_san.from_square)
 
             # If the piece is a king, we skip the intervention as a legal chess game must have a king.
@@ -597,13 +581,9 @@ def perform_board_interventions(
                 ):
                     target = 0.0
                     blank_probe = probes[layer][:, :, r, c, BLANK_INDEX].squeeze()
-                    piece_probe = probes[layer][
-                        :, :, r, c, moved_piece_probe_index
-                    ].squeeze()
+                    piece_probe = probes[layer][:, :, r, c, moved_piece_probe_index].squeeze()
 
-                    flip_dir = (piece_probe * piece_coefficient) - (
-                        blank_probe * blank_coefficient
-                    )
+                    flip_dir = (piece_probe * piece_coefficient) - (blank_probe * blank_coefficient)
                     flip_dir = flip_dir / flip_dir.norm()
 
                     if (
@@ -624,12 +604,9 @@ def perform_board_interventions(
 
                     if layer < GPT_LAYER_COUNT:
                         # We want to intervene on multiple positions in the sequence because a move is multiple tokens
-                        # scale *= 0.5
                         resid[:, :] -= scale * flip_dir
-                        # resid[:, move_of_interest_index] -= scale * flip_dir
-                    coeff = (
-                        resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
-                    )
+
+                    coeff = resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
 
                     # So we only print once during inference
                     if resid.shape[1] <= move_of_interest_index + 1:
@@ -678,9 +655,7 @@ def perform_board_interventions(
 
                 probe_data.model.reset_hooks()
 
-                if check_if_legal_move(
-                    modified_board, modified_board_argmax_model_move
-                ):
+                if check_if_legal_move(modified_board, modified_board_argmax_model_move):
                     # Step 8: The move is legal. Update the legal move trackers
                     if track_outputs:
                         for layer in output_tracker:
@@ -730,10 +705,9 @@ scales_lookup = {
 }
 
 scales_lookup = {
-    # InterventionType.SINGLE_SCALE: [0.5, 0.75, 1.0, 1.2],
-    InterventionType.SINGLE_SCALE: [1.1],
+    InterventionType.SINGLE_SCALE: [1.1, 1.2, 1.3],
     InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
-    InterventionType.SINGLE_TARGET: [-7, -10, -13],
+    InterventionType.SINGLE_TARGET: [-9, -10, -11],
 }
 
 # scales_lookup = {
@@ -745,18 +719,17 @@ scales_lookup = {
 intervention_types = [
     InterventionType.SINGLE_SCALE,
     # InterventionType.AVERAGE_TARGET,
-    # InterventionType.SINGLE_TARGET,
+    InterventionType.SINGLE_TARGET,
 ]
 
 sampling_type = SamplingType.BOTH
 
-num_games = 8
+num_games = 4
 
 for intervention_type in intervention_types:
 
-
     probe_names = {}
-    first_layer = 3
+    first_layer = 2
     last_layer = 6
 
     # The last layer in the model has an average empty value about 2x of all other layers

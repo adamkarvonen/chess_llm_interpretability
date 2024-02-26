@@ -33,9 +33,7 @@ PIECE_TO_ONE_HOT_MAPPING = {
     5: 11,
     6: 12,
 }
-ONE_HOT_TO_PIECE_MAPPING = {
-    value: key for key, value in PIECE_TO_ONE_HOT_MAPPING.items()
-}
+ONE_HOT_TO_PIECE_MAPPING = {value: key for key, value in PIECE_TO_ONE_HOT_MAPPING.items()}
 
 
 def pretty_print_state_stack(state: np.ndarray) -> None:
@@ -50,9 +48,7 @@ def pretty_print_state_stack(state: np.ndarray) -> None:
         print(" ".join(piece_symbols[piece] for piece in row))
 
 
-def board_to_random_state(
-    board: chess.Board, skill: Optional[int] = None
-) -> np.ndarray:
+def board_to_random_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
     """Given a chess board object, return a 8x8 np.ndarray.
     Every square should be randomly assigned to 1, -1, or 0.
     This is to sanity check the linear probe.
@@ -73,9 +69,7 @@ def board_to_skill_state(board: chess.Board, skill: float) -> np.ndarray:
     return state
 
 
-def board_to_piece_color_state(
-    board: chess.Board, skill: Optional[int] = None
-) -> np.ndarray:
+def board_to_piece_color_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
     """Given a chess board object, return a 8x8 np.ndarray.
     The 8x8 array should tell if each square is black, white, or blank.
     White is 1, black is -1, and blank is 0.
@@ -120,9 +114,7 @@ def state_stack_to_chess_board(state: torch.Tensor) -> chess.Board:
             if piece != 0:
                 piece_type = abs(piece)
                 color = chess.WHITE if piece > 0 else chess.BLACK
-                board.set_piece_at(
-                    chess.square(col_idx, row_idx), chess.Piece(piece_type, color)
-                )
+                board.set_piece_at(chess.square(col_idx, row_idx), chess.Piece(piece_type, color))
     return board
 
 
@@ -202,9 +194,9 @@ def create_state_stacks(
     for idx, board in enumerate(moves_strings):
         if skill_array is not None:
             skill = skill_array[idx]
-        state_stack = torch.tensor(
-            create_state_stack(board, custom_board_to_state_fn, skill)
-        ).to(dtype=torch.float32)
+        state_stack = torch.tensor(create_state_stack(board, custom_board_to_state_fn, skill)).to(
+            dtype=torch.float32
+        )
         state_stacks.append(state_stack)
 
     # Convert the list of tensors to a single tensor
@@ -305,15 +297,14 @@ def find_even_spaces_indices(moves_string: str) -> list[int]:
     even_indices = indices[::2]
     return even_indices
 
+
 def find_dots_indices_offset_one(moves_string: str) -> list[int]:
     """Returns a list of ints of indices of every '.' in the string.
     This will hopefully provide a reasonable starting point for training a linear probe.
     """
     indices = [index for index, char in enumerate(moves_string) if char == "."]
 
-    incremented_indices = [
-        index + 1 for index in indices if index + 1 < len(moves_string)
-    ]
+    incremented_indices = [index + 1 for index in indices if index + 1 < len(moves_string)]
 
     return incremented_indices
 
@@ -327,9 +318,7 @@ def find_even_indices_offset_one(moves_string: str) -> list[int]:
     even_indices = indices[::2]
 
     # Increment each even index by one, ensuring it doesn't exceed the string length
-    incremented_indices = [
-        index + 1 for index in even_indices if index + 1 < len(moves_string)
-    ]
+    incremented_indices = [index + 1 for index in even_indices if index + 1 < len(moves_string)]
 
     return incremented_indices
 
@@ -343,9 +332,7 @@ def find_odd_indices_offset_one(moves_string: str) -> list[int]:
     odd_indices = indices[1::2]
 
     # Increment each odd index by one, ensuring it doesn't exceed the string length
-    incremented_indices = [
-        index + 1 for index in odd_indices if index + 1 < len(moves_string)
-    ]
+    incremented_indices = [index + 1 for index in odd_indices if index + 1 < len(moves_string)]
 
     return incremented_indices
 
