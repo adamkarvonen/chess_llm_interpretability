@@ -13,7 +13,7 @@ For more information, refer to this [post](https://adamkarvonen.github.io/machin
 
 # Setup
 
-Create a Python environment with Python 3.10.
+Create a Python environment with Python 3.10 or 3.11 (I'm using 3.11).
 ```
 pip install -r requirements.txt
 python model_setup.py
