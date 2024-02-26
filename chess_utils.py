@@ -186,11 +186,12 @@ def create_state_stack(
     return np.array(expanded_states)
 
 
+# TODO: Investigate if we need dtype=torch.float32, as state_stacks should only contain integers.
 def create_state_stacks(
     moves_strings: list[str],
     custom_board_to_state_fn: Callable[[chess.Board], np.ndarray],
     skill_array: Optional[np.ndarray] = None,
-) -> Int[Tensor, "modes sample_size pgn_str_length rows cols"]:
+) -> Float[Tensor, "modes sample_size pgn_str_length rows cols"]:
     """Given a list of strings of PGN format moves, create a tensor of shape (len(moves_strings), 8, 8).
     custom_board_to_state is a function that takes a chess.Board object and returns a 8x8 np.ndarray for
     board state, or 1x1 for centipawn advantage."""

@@ -153,8 +153,8 @@ def prepare_intervention_data(
     probe_data: train_test_chess.LinearProbeData,
     num_games: int,
 ) -> tuple[
-    dict,
-    Int[Tensor, "modes num_games pgn_str_length rows cols"],
+    dict[int, Float[Tensor, "modes d_model rows cols options"]],
+    Float[Tensor, "modes num_games pgn_str_length rows cols"],
     Int[Tensor, "num_games num_white_moves"],
 ]:
 
