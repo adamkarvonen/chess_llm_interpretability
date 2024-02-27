@@ -18,7 +18,6 @@ import logging
 from typing import Optional
 from jaxtyping import Int, Float, jaxtyped
 from torch import Tensor
-import jaxtyping
 from beartype import beartype
 
 import chess_utils
@@ -52,10 +51,10 @@ SAVED_PROBE_DIR = "linear_probes/saved_probes/"
 WANDB_PROJECT = "chess_linear_probes"
 BATCH_SIZE = 2
 
-device = (
+DEVICE = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 )
-logger.info(f"Using device: {device}")
+logger.info(f"Using device: {DEVICE}")
 
 
 wandb_logging = False
@@ -160,7 +159,9 @@ class LinearProbeData:
     user_state_dict_one_hot_mapping: Optional[dict[int, int]] = None
 
 
-def get_transformer_lens_model(model_name: str, n_layers: int) -> HookedTransformer:
+def get_transformer_lens_model(
+    model_name: str, n_layers: int, device: torch.device
+) -> HookedTransformer:
     cfg = HookedTransformerConfig(
         n_layers=n_layers,
         d_model=512,
@@ -344,15 +345,15 @@ def prepare_data_batch(
         config.num_cols,
         config.min_val,
         config.max_val,
-        device,
+        DEVICE,
         state_stack,
         probe_data.user_state_dict_one_hot_mapping,
     ).to(
-        device
+        DEVICE
     )  # shape (modes, batch_size, num_white_moves, num_rows, num_cols, num_options)
 
     with torch.inference_mode():
-        _, cache = probe_data.model.run_with_cache(games_int.to(device)[:, :-1], return_type=None)
+        _, cache = probe_data.model.run_with_cache(games_int.to(DEVICE)[:, :-1], return_type=None)
         resid_post = cache["resid_post", probe_data.layer][
             :, :
         ]  # shape (batch_size, pgn_str_length - 1, d_model)
@@ -482,7 +483,7 @@ def train_linear_probe_cross_entropy(
         config.num_cols,
         one_hot_range,
         requires_grad=False,
-        device=device,
+        device=DEVICE,
     ) / np.sqrt(probe_data.model.cfg.d_model)
     linear_probe.requires_grad = True
     logger.info(f"linear_probe shape: {linear_probe.shape}")
@@ -577,6 +578,7 @@ def construct_linear_probe_data(
     model_name: str,
     config: Config,
     max_games: int,
+    device: torch.device,
 ) -> LinearProbeData:
     """We need the following data to train or test a linear probe:
     - The layer to probe in the GPT
@@ -595,7 +597,7 @@ def construct_linear_probe_data(
     if dataset_prefix == "stockfish_":
         assert "lichess" not in model_name, "Are you sure you're using the right model?"
 
-    model = get_transformer_lens_model(model_name, n_layers)
+    model = get_transformer_lens_model(model_name, n_layers, device)
     user_state_dict_one_hot_mapping, df = process_dataframe(input_dataframe_file, config)
     df = df[:max_games]
     board_seqs_string = get_board_seqs_string(df)
@@ -671,7 +673,7 @@ def test_linear_probe_cross_entropy(
 
     logging_dict["num_games"] = num_games
 
-    checkpoint = torch.load(linear_probe_name, map_location=device)
+    checkpoint = torch.load(linear_probe_name, map_location=DEVICE)
     linear_probe = checkpoint["linear_probe"]
     logger.info(f"linear_probe shape: {linear_probe.shape}")
     logger.info(f"custom_indices shape: {probe_data.custom_indices.shape}")
@@ -768,7 +770,7 @@ if __name__ == "__main__":
             probe_file_location = f"{SAVED_PROBE_DIR}{probe_to_test}"
             # We will populate all parameters using information in the probe state dict
             with open(probe_file_location, "rb") as f:
-                state_dict = torch.load(f, map_location=torch.device(device))
+                state_dict = torch.load(f, map_location=torch.device(DEVICE))
                 print(state_dict.keys())
                 for key in state_dict.keys():
                     if key != "linear_probe":
@@ -801,6 +803,7 @@ if __name__ == "__main__":
                     model_name,
                     config,
                     TRAIN_PARAMS.max_test_games,
+                    DEVICE,
                 )
 
                 logging_dict = init_logging_dict(
@@ -844,6 +847,7 @@ if __name__ == "__main__":
             model_name,
             config,
             max_games,
+            DEVICE,
         )
 
         logging_dict = init_logging_dict(

@@ -54,10 +54,10 @@ BLANK_INDEX = chess_utils.PIECE_TO_ONE_HOT_MAPPING[0]
 SAMPLING_MOVES = 5
 TEMPERATURE = 1.0
 
-device = (
+DEVICE = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 )
-logger.info(f"Using device: {device}")
+logger.info(f"Using device: {DEVICE}")
 
 with open("models/meta.pkl", "rb") as f:
     META = pickle.load(f)
@@ -112,7 +112,7 @@ class MoveCounters:
 def get_probe_data(probe_name: str, num_games: int) -> train_test_chess.LinearProbeData:
     probe_file_location = f"{SAVED_PROBE_DIR}{probe_name}"
     with open(probe_file_location, "rb") as f:
-        state_dict = torch.load(f, map_location=torch.device(device))
+        state_dict = torch.load(f, map_location=torch.device(DEVICE))
         print(state_dict.keys())
         for key in state_dict.keys():
             if key != "linear_probe":
@@ -143,6 +143,7 @@ def get_probe_data(probe_name: str, num_games: int) -> train_test_chess.LinearPr
             model_name,
             config,
             num_games,
+            DEVICE,
         )
         return probe_data
 
@@ -163,7 +164,7 @@ def prepare_intervention_data(
 
     for layer, probe_name in probe_names.items():
         probe_file_location = f"{SAVED_PROBE_DIR}{probe_name}"
-        checkpoint = torch.load(probe_file_location, map_location=torch.device(device))
+        checkpoint = torch.load(probe_file_location, map_location=torch.device(DEVICE))
         linear_probe = checkpoint["linear_probe"]
         probes[layer] = linear_probe
 
@@ -444,7 +445,7 @@ def average_probe_empty_cell_value(
         target_val = chess_utils.ONE_HOT_TO_PIECE_MAPPING[piece_index]
         probe_state = probe_output[0, 0, move_of_interest_index, :, :, piece_index]
         value_mask = state_stacks[0, sample_index, move_of_interest_index, :, :] != target_val
-        value_mask = value_mask.to(device)
+        value_mask = value_mask.to(DEVICE)
 
         # Select the relevant values based on the mask
         relevant_values = torch.masked_select(probe_state, value_mask)
@@ -512,7 +513,7 @@ def perform_board_interventions(
             # model_input.shape is (1, move_of_interest_index + 1)
             model_input = chess_utils.encode_string(META, pgn_string)
             # model input shape: (1, pgn_str_length)
-            model_input = torch.tensor(model_input).unsqueeze(0).to(device)
+            model_input = torch.tensor(model_input).unsqueeze(0).to(DEVICE)
             argmax_model_move = chess_utils.get_model_move(
                 probe_data.model, META, model_input, temperature=0.0
             )
