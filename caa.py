@@ -32,7 +32,7 @@ else:
 logging.basicConfig(level=log_level)
 logger = logging.getLogger(__name__)
 
-batch_size = 1
+BATCH_SIZE = 1
 MAXIMUM_TESTING_GAMES = 2000
 
 
@@ -54,6 +54,7 @@ def check_tensor_values(tensor, tensor_name="Tensor"):
         tensor = tensor.to("mps")
 
 
+@torch.no_grad()
 def create_contrastive_activations(
     activation_name: str,
     probe_data: LinearProbeData,
@@ -63,291 +64,76 @@ def create_contrastive_activations(
     assert misc_logging_dict["split"] == "train", "Don't train on the test set"
 
     num_games = min(
-        ((len(probe_data.board_seqs_int) // batch_size) * batch_size),
-        (MAXIMUM_TESTING_GAMES // batch_size) * batch_size,
+        ((len(probe_data.board_seqs_int) // BATCH_SIZE) * BATCH_SIZE),
+        (MAXIMUM_TESTING_GAMES // BATCH_SIZE) * BATCH_SIZE,
     )  # Unfortunately, num_games must be divisible by batch_size TODO: Fix this
 
-    one_hot_range = config.max_val - config.min_val + 1
-    if config.levels_of_interest is not None:
-        one_hot_range = len(config.levels_of_interest)
-
-    indexing_function_name = config.custom_indexing_function.__name__
-    process_data = False
-    if config.levels_of_interest is not None:
-        process_data = True
-
-    # logger.debug(dots_indices.shape)
-
-    wandb_project = "chess_linear_probes"
-    wandb_run_name = f"{config.linear_probe_name}_{model_name}_layer_{probe_data.layer}_indexing_{indexing_function_name}"
-    if config.levels_of_interest is not None:
-        wandb_run_name += "_levels"
-        for level in config.levels_of_interest:
-            wandb_run_name += f"_{level}"
-
-    logging_dict = {
-        "linear_probe_name": config.linear_probe_name,
-        "model_name": model_name,
-        "layer": probe_data.layer,
-        "indexing_function_name": indexing_function_name,
-        "batch_size": batch_size,
-        "split": split,
-        "pos_start": config.pos_start,
-        "num_games": num_games,
-        "one_hot_range": one_hot_range,
-        "wandb_project": wandb_project,
-        "wandb_run_name": wandb_run_name,
-        "config_name": config.linear_probe_name,
-        "model_name": model_name,
-        "dataset_prefix": dataset_prefix,
-        "process_data": process_data,
-        "column_name": config.column_name,
-        "split": split,
-        "levels_of_interest": config.levels_of_interest,
-    }
-    logging_dict.update(misc_logging_dict)
+    logging_dict = train_test_chess.init_logging_dict(
+        config, probe_data, split, dataset_prefix, model_name, n_layers
+    )
 
     current_iter = 0
     accuracy = 0
     accuracy_list = []
-    with torch.inference_mode():
-        full_train_indices = torch.arange(0, num_games)
-        sum_high_elo = torch.zeros((512), device=device)
-        sum_low_elo = torch.zeros((512), device=device)
-        count_high_elo = 0
-        count_low_elo = 0
-        for i in tqdm(range(0, num_games, batch_size)):
-            indices = full_train_indices[i : i + batch_size]
-            list_of_indices = (
-                indices.tolist()
-            )  # For indexing into the board_seqs_string list of strings
-            # logger.debug(list_of_indices)
-            games_int = probe_data.board_seqs_int[indices]
-            games_int = games_int[:, :]
-            # logger.debug(games_int.shape)
-            games_str = [probe_data.board_seqs_string[idx] for idx in list_of_indices]
-            games_str = [s[:] for s in games_str]
-            games_dots = probe_data.custom_indices[indices]
-            games_dots = games_dots[:, config.pos_start :]
-            # logger.debug(games_dots.shape)
+    full_train_indices = torch.arange(0, num_games)
+    sum_high_elo = torch.zeros((512), device=device)
+    sum_low_elo = torch.zeros((512), device=device)
+    count_high_elo = 0
+    count_low_elo = 0
+    for i in tqdm(range(0, num_games, BATCH_SIZE)):
+        indices = full_train_indices[i : i + BATCH_SIZE]
+        games_int = probe_data.board_seqs_int[indices]
+        games_dots = probe_data.custom_indices[indices]
+        games_dots = games_dots[:, config.pos_start :]
 
-            if config.probing_for_skill:
-                games_skill = probe_data.skill_stack[indices]
-                logger.debug(f"games_skill shape: {games_skill.shape}")
+        if config.probing_for_skill:
+            games_skill = probe_data.skill_stack[indices]
+            logger.debug(f"games_skill shape: {games_skill.shape}")
+        else:
+            raise Exception("CAA currently only supports skill vectors")
+
+        _, cache = probe_data.model.run_with_cache(games_int.to(device)[:, :-1], return_type=None)
+        resid_post = cache["resid_post", layer][:, :]
+
+        indexed_resid_posts = []
+
+        for batch_idx in range(games_dots.size(0)):
+            # Get the indices for the current batch
+            dots_indices_for_batch = games_dots[batch_idx]
+
+            # Index the state_stack for the current batch
+            indexed_resid_post = resid_post[batch_idx, dots_indices_for_batch]
+
+            # Append the result to the list
+            indexed_resid_posts.append(indexed_resid_post)
+
+        # Stack the indexed state stacks along the first dimension
+        # This results in a tensor of shape [2, 61, 8, 8] (assuming all batches have 61 indices)
+        resid_post = torch.stack(indexed_resid_posts)
+        summed_resid_post = einops.reduce(
+            resid_post, "batch indices model_dim -> batch model_dim", "sum"
+        )
+
+        for batch_idx in range(BATCH_SIZE):
+            if games_skill[batch_idx] == config.levels_of_interest[1]:
+                sum_high_elo += summed_resid_post[batch_idx]
+                count_high_elo += 1
+            elif games_skill[batch_idx] == config.levels_of_interest[0]:
+                sum_low_elo += summed_resid_post[batch_idx]
+                count_low_elo += 1
             else:
-                raise Exception("CAA currently only supports skill vectors")
+                raise Exception("Invalid skill level")
 
-            # logger.debug(state_stack_one_hot.shape)
-            _, cache = probe_data.model.run_with_cache(
-                games_int.to(device)[:, :-1], return_type=None
-            )
-            resid_post = cache["resid_post", layer][:, :]
-            # Initialize a list to hold the indexed state stacks
-            indexed_resid_posts = []
+        logger.debug(
+            f"count_high_elo: {count_high_elo}, count_low_elo: {count_low_elo}, games_skill: {games_skill}"
+        )
 
-            for batch_idx in range(games_dots.size(0)):
-                # Get the indices for the current batch
-                dots_indices_for_batch = games_dots[batch_idx]
+        if i % 100 == 0:
+            logger.info(f"batch {i}, acc {accuracy}")
 
-                # Index the state_stack for the current batch
-                indexed_resid_post = resid_post[batch_idx, dots_indices_for_batch]
+        current_iter += BATCH_SIZE
 
-                # Append the result to the list
-                indexed_resid_posts.append(indexed_resid_post)
-
-            # Stack the indexed state stacks along the first dimension
-            # This results in a tensor of shape [2, 61, 8, 8] (assuming all batches have 61 indices)
-            resid_post = torch.stack(indexed_resid_posts)
-            summed_resid_post = einops.reduce(
-                resid_post, "batch indices model_dim -> batch model_dim", "sum"
-            )
-            # logger.debug(f"resid_post: {resid_post.shape}")
-            # logger.debug(f"summed_resid_post: {summed_resid_post.shape}")
-            # logger.debug(resid_post[0, :, :2])
-            # logger.debug(summed_resid_post[0, :2])
-
-            for batch_idx in range(batch_size):
-                if games_skill[batch_idx] == config.levels_of_interest[1]:
-                    sum_high_elo += summed_resid_post[batch_idx]
-                    count_high_elo += 1
-                elif games_skill[batch_idx] == config.levels_of_interest[0]:
-                    sum_low_elo += summed_resid_post[batch_idx]
-                    count_low_elo += 1
-                else:
-                    raise Exception("Invalid skill level")
-
-            logger.debug(
-                f"count_high_elo: {count_high_elo}, count_low_elo: {count_low_elo}, games_skill: {games_skill}"
-            )
-
-            # assert resid_post.shape == state_stack_one_hot.shape
-
-            if i % 100 == 0:
-                logger.info(f"batch {i}, acc {accuracy}")
-
-            current_iter += batch_size
-
-            accuracy_list.append(accuracy)
-
-    check_tensor_values(sum_high_elo, "sum_high_elo")
-    check_tensor_values(sum_low_elo, "sum_low_elo")
-
-    average_high_elo_activation = sum_high_elo / count_high_elo
-    average_low_elo_activation = sum_low_elo / count_low_elo
-
-    difference_vector = average_high_elo_activation - average_low_elo_activation
-
-    state = {
-        "average_high_elo_activation": average_high_elo_activation,
-        "average_low_elo_activation": average_low_elo_activation,
-        "difference_vector": difference_vector,
-        "metadata": {
-            "description": "Average vectors for high and low Elo chess games",
-            "count_high_elo": count_high_elo,
-            "count_low_elo": count_low_elo,
-        },
-    }
-    state.update(logging_dict)
-
-    output_probe_data_name = activation_name.split("/")[-1].split(".")[0]
-    output_location = f"{CAA_DIR}{output_probe_data_name}.pt"
-
-    logger.info(f"Saving activations to {output_location}")
-    torch.save(state, output_location)
-
-
-# In progress function that is not yet complete
-# For curiosity, I want to see how contrastive activations compare with linear probes for chess skill classification
-def classify_using_contrastive_activations(
-    activation_name: str,
-    probe_data: LinearProbeData,
-    config: Config,
-    misc_logging_dict: dict,
-):
-    assert misc_logging_dict["split"] == "test", "Don't test on the train set"
-
-    num_games = min(
-        ((len(probe_data.board_seqs_int) // batch_size) * batch_size),
-        (MAXIMUM_TESTING_GAMES // batch_size) * batch_size,
-    )  # Unfortunately, num_games must be divisible by batch_size TODO: Fix this
-
-    one_hot_range = config.max_val - config.min_val + 1
-    if config.levels_of_interest is not None:
-        one_hot_range = len(config.levels_of_interest)
-
-    indexing_function_name = config.custom_indexing_function.__name__
-    process_data = False
-    if config.levels_of_interest is not None:
-        process_data = True
-
-    # logger.debug(dots_indices.shape)
-
-    wandb_project = "chess_linear_probes"
-    wandb_run_name = f"{config.linear_probe_name}_{model_name}_layer_{probe_data.layer}_indexing_{indexing_function_name}"
-    if config.levels_of_interest is not None:
-        wandb_run_name += "_levels"
-        for level in config.levels_of_interest:
-            wandb_run_name += f"_{level}"
-
-    logging_dict = {
-        "linear_probe_name": config.linear_probe_name,
-        "model_name": model_name,
-        "layer": probe_data.layer,
-        "indexing_function_name": indexing_function_name,
-        "batch_size": batch_size,
-        "split": split,
-        "pos_start": config.pos_start,
-        "num_games": num_games,
-        "one_hot_range": one_hot_range,
-        "wandb_project": wandb_project,
-        "wandb_run_name": wandb_run_name,
-        "config_name": config.linear_probe_name,
-        "model_name": model_name,
-        "dataset_prefix": dataset_prefix,
-        "process_data": process_data,
-        "column_name": config.column_name,
-        "split": split,
-        "levels_of_interest": config.levels_of_interest,
-    }
-    logging_dict.update(misc_logging_dict)
-
-    current_iter = 0
-    accuracy = 0
-    accuracy_list = []
-    with torch.inference_mode():
-        full_test_indices = torch.arange(0, num_games)
-        sum_high_elo = torch.zeros((512), device=device)
-        sum_low_elo = torch.zeros((512), device=device)
-        count_high_elo = 0
-        count_low_elo = 0
-        for i in tqdm(range(0, num_games, batch_size)):
-            indices = full_test_indices[i : i + batch_size]
-            list_of_indices = (
-                indices.tolist()
-            )  # For indexing into the board_seqs_string list of strings
-            # logger.debug(list_of_indices)
-            games_int = probe_data.board_seqs_int[indices]
-            games_int = games_int[:, :]
-            # logger.debug(games_int.shape)
-            games_str = [probe_data.board_seqs_string[idx] for idx in list_of_indices]
-            games_str = [s[:] for s in games_str]
-            games_dots = probe_data.custom_indices[indices]
-            games_dots = games_dots[:, config.pos_start :]
-            # logger.debug(games_dots.shape)
-
-            if config.probing_for_skill:
-                games_skill = probe_data.skill_stack[indices]
-                logger.debug(f"games_skill shape: {games_skill.shape}")
-            else:
-                raise Exception("CAA currently only supports skill vectors")
-
-            # logger.debug(state_stack_one_hot.shape)
-            _, cache = probe_data.model.run_with_cache(
-                games_int.to(device)[:, :-1], return_type=None
-            )
-            resid_post = cache["resid_post", layer][:, :]
-            # Initialize a list to hold the indexed state stacks
-            indexed_resid_posts = []
-
-            for batch_idx in range(games_dots.size(0)):
-                # Get the indices for the current batch
-                dots_indices_for_batch = games_dots[batch_idx]
-
-                # Index the state_stack for the current batch
-                indexed_resid_post = resid_post[batch_idx, dots_indices_for_batch]
-
-                # Append the result to the list
-                indexed_resid_posts.append(indexed_resid_post)
-
-            # Stack the indexed state stacks along the first dimension
-            resid_post = torch.stack(indexed_resid_posts)
-            # logger.debug(f"resid_post: {resid_post.shape}")
-            # logger.debug(f"summed_resid_post: {summed_resid_post.shape}")
-            # logger.debug(resid_post[0, :, :2])
-            # logger.debug(summed_resid_post[0, :2])
-
-            for batch_idx in range(batch_size):
-                if games_skill[batch_idx] == config.levels_of_interest[1]:
-                    sum_high_elo += summed_resid_post[batch_idx]
-                    count_high_elo += 1
-                elif games_skill[batch_idx] == config.levels_of_interest[0]:
-                    sum_low_elo += summed_resid_post[batch_idx]
-                    count_low_elo += 1
-                else:
-                    raise Exception("Invalid skill level")
-
-            logger.debug(
-                f"count_high_elo: {count_high_elo}, count_low_elo: {count_low_elo}, games_skill: {games_skill}"
-            )
-
-            # assert resid_post.shape == state_stack_one_hot.shape
-
-            if i % 100 == 0:
-                logger.info(f"batch {i}, acc {accuracy}")
-
-            current_iter += batch_size
-
-            accuracy_list.append(accuracy)
+        accuracy_list.append(accuracy)
 
     check_tensor_values(sum_high_elo, "sum_high_elo")
     check_tensor_values(sum_low_elo, "sum_low_elo")
@@ -412,13 +198,6 @@ for layer, level, pos_start, dataset_prefix in itertools.product(
     )
     config.pos_start = pos_start
 
-    misc_logging_dict = {
-        "split": split,
-        "dataset_prefix": dataset_prefix,
-        "model_name": model_name,
-        "n_layers": n_layers,
-    }
-
     probe_data = train_test_chess.construct_linear_probe_data(
         input_dataframe_file,
         layer,
@@ -434,4 +213,4 @@ for layer, level, pos_start, dataset_prefix in itertools.product(
 
     activation_name = f"{dataset_prefix}{split}_n_layers_{n_layers}_layer_{layer}_pos_start_{config.pos_start}_levels_{levels_str}_activations"
     activation_name = f"{dataset_prefix}{split}_layer_{layer}_pos_start_{config.pos_start}_levels_{levels_str}_activations"
-    create_contrastive_activations(activation_name, probe_data, config, misc_logging_dict)
+    create_contrastive_activations(activation_name, probe_data, config)
