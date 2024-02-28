@@ -1,17 +1,9 @@
-import transformer_lens.utils as utils
-from transformer_lens import HookedTransformer, HookedTransformerConfig
 import einops
 import torch
 from tqdm import tqdm
-import numpy as np
-from fancy_einsum import einsum
-import numpy as np
-from dataclasses import dataclass
-import pandas as pd
 import logging
 import itertools
 
-import chess_utils
 import train_test_chess
 from train_test_chess import Config, LinearProbeData
 
@@ -33,7 +25,7 @@ logging.basicConfig(level=log_level)
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 1
-MAXIMUM_TESTING_GAMES = 2000
+MAXIMUM_TRAINING_GAMES = 500
 
 
 def check_tensor_values(tensor, tensor_name="Tensor"):
@@ -59,22 +51,18 @@ def create_contrastive_activations(
     activation_name: str,
     probe_data: LinearProbeData,
     config: Config,
-    misc_logging_dict: dict,
+    logging_dict: dict,
 ):
-    assert misc_logging_dict["split"] == "train", "Don't train on the test set"
+    assert logging_dict["split"] == "train", "Don't train on the test set"
 
-    num_games = min(
-        ((len(probe_data.board_seqs_int) // BATCH_SIZE) * BATCH_SIZE),
-        (MAXIMUM_TESTING_GAMES // BATCH_SIZE) * BATCH_SIZE,
-    )  # Unfortunately, num_games must be divisible by batch_size TODO: Fix this
+    num_games = (MAXIMUM_TRAINING_GAMES // BATCH_SIZE) * BATCH_SIZE
 
-    logging_dict = train_test_chess.init_logging_dict(
-        config, probe_data, split, dataset_prefix, model_name, n_layers
-    )
+    if num_games < len(probe_data.board_seqs_int):
+        raise ValueError(
+            f"Number of games ({num_games}) is less than the number of games in the dataset ({len(probe_data.board_seqs_int)})"
+        )
 
     current_iter = 0
-    accuracy = 0
-    accuracy_list = []
     full_train_indices = torch.arange(0, num_games)
     sum_high_elo = torch.zeros((512), device=device)
     sum_low_elo = torch.zeros((512), device=device)
@@ -82,8 +70,8 @@ def create_contrastive_activations(
     count_low_elo = 0
     for i in tqdm(range(0, num_games, BATCH_SIZE)):
         indices = full_train_indices[i : i + BATCH_SIZE]
-        games_int = probe_data.board_seqs_int[indices]
-        games_dots = probe_data.custom_indices[indices]
+        games_int = probe_data.board_seqs_int[indices]  # shape (batch, pgn_str_length)
+        games_dots = probe_data.custom_indices[indices]  # shape (batch, num_white_moves)
         games_dots = games_dots[:, config.pos_start :]
 
         if config.probing_for_skill:
@@ -93,7 +81,7 @@ def create_contrastive_activations(
             raise Exception("CAA currently only supports skill vectors")
 
         _, cache = probe_data.model.run_with_cache(games_int.to(device)[:, :-1], return_type=None)
-        resid_post = cache["resid_post", layer][:, :]
+        resid_post = cache["resid_post", layer][:, :]  # shape (batch, pgn_str_length - 1, d_model)
 
         indexed_resid_posts = []
 
@@ -109,17 +97,17 @@ def create_contrastive_activations(
 
         # Stack the indexed state stacks along the first dimension
         # This results in a tensor of shape [2, 61, 8, 8] (assuming all batches have 61 indices)
-        resid_post = torch.stack(indexed_resid_posts)
+        resid_post = torch.stack(indexed_resid_posts)  # shape (batch, num_white_moves, d_model)
         summed_resid_post = einops.reduce(
             resid_post, "batch indices model_dim -> batch model_dim", "sum"
-        )
+        )  # shape (batch, d_model)
 
         for batch_idx in range(BATCH_SIZE):
             if games_skill[batch_idx] == config.levels_of_interest[1]:
-                sum_high_elo += summed_resid_post[batch_idx]
+                sum_high_elo += summed_resid_post[batch_idx]  # shape (d_model)
                 count_high_elo += 1
             elif games_skill[batch_idx] == config.levels_of_interest[0]:
-                sum_low_elo += summed_resid_post[batch_idx]
+                sum_low_elo += summed_resid_post[batch_idx]  # shape (d_model)
                 count_low_elo += 1
             else:
                 raise Exception("Invalid skill level")
@@ -129,37 +117,30 @@ def create_contrastive_activations(
         )
 
         if i % 100 == 0:
-            logger.info(f"batch {i}, acc {accuracy}")
+            logger.info(
+                f"batch {i}, count_high_elo: {count_high_elo}, count_low_elo: {count_low_elo}"
+            )
 
         current_iter += BATCH_SIZE
-
-        accuracy_list.append(accuracy)
 
     check_tensor_values(sum_high_elo, "sum_high_elo")
     check_tensor_values(sum_low_elo, "sum_low_elo")
 
-    average_high_elo_activation = sum_high_elo / count_high_elo
-    average_low_elo_activation = sum_low_elo / count_low_elo
+    average_high_elo_activation = sum_high_elo / count_high_elo  # shape (d_model)
+    average_low_elo_activation = sum_low_elo / count_low_elo  # shape (d_model)
 
     difference_vector = average_high_elo_activation - average_low_elo_activation
 
-    state = {
-        "average_high_elo_activation": average_high_elo_activation,
-        "average_low_elo_activation": average_low_elo_activation,
-        "difference_vector": difference_vector,
-        "metadata": {
-            "description": "Average vectors for high and low Elo chess games",
-            "count_high_elo": count_high_elo,
-            "count_low_elo": count_low_elo,
-        },
-    }
-    state.update(logging_dict)
+    logging_dict["average_high_elo_activation"] = average_high_elo_activation
+    logging_dict["average_low_elo_activation"] = average_low_elo_activation
+    logging_dict["difference_vector"] = difference_vector
+    logging_dict["count_high_elo"] = count_high_elo
+    logging_dict["count_low_elo"] = count_low_elo
 
-    output_probe_data_name = activation_name.split("/")[-1].split(".")[0]
-    output_location = f"{CAA_DIR}{output_probe_data_name}.pt"
+    output_location = f"{CAA_DIR}{activation_name}.pt"
 
     logger.info(f"Saving activations to {output_location}")
-    torch.save(state, output_location)
+    torch.save(logging_dict, output_location)
 
 
 MODEL_DIR = "models/"
@@ -178,15 +159,21 @@ config = train_test_chess.skill_config
 layers = range(11, 15, 1)
 levels_of_interest = [[0, 5]]
 pos_starts = [25]
-dataset_prefixes = [
-    "lichess_",
-]
 
+caa_type = "simple"
+caa_type = "cascade"
 
-for layer, level, pos_start, dataset_prefix in itertools.product(
-    layers, levels_of_interest, pos_starts, dataset_prefixes
-):
-    dataset_prefix = dataset_prefix
+cascade_layers = ""
+
+if caa_type == "cascade":
+    cascade_layers = [f"{str(layer)}_" for layer in layers]
+
+for (
+    layer,
+    level,
+    pos_start,
+) in itertools.product(layers, levels_of_interest, pos_starts):
+    dataset_prefix = "lichess_"
     layer = layer
     split = "train"
     n_layers = 16
@@ -205,12 +192,18 @@ for layer, level, pos_start, dataset_prefix in itertools.product(
         n_layers,
         model_name,
         config,
-        MAXIMUM_TESTING_GAMES,
+        MAXIMUM_TRAINING_GAMES,
+        device,
     )
 
-    levels_str = [str(i) for i in level]
-    levels_str = "".join(levels_str)
+    levels_str = "".join([str(i) for i in level])
 
-    activation_name = f"{dataset_prefix}{split}_n_layers_{n_layers}_layer_{layer}_pos_start_{config.pos_start}_levels_{levels_str}_activations"
-    activation_name = f"{dataset_prefix}{split}_layer_{layer}_pos_start_{config.pos_start}_levels_{levels_str}_activations"
-    create_contrastive_activations(activation_name, probe_data, config)
+    activation_name = (
+        f"type=caa_{caa_type}{cascade_layers}_model={n_layers}layers_layer={layer}_activations"
+    )
+
+    logging_dict = train_test_chess.init_logging_dict(
+        config, probe_data, split, dataset_prefix, model_name, n_layers
+    )
+
+    create_contrastive_activations(activation_name, probe_data, config, logging_dict)
