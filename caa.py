@@ -3,6 +3,8 @@ import torch
 from tqdm import tqdm
 import logging
 import itertools
+from transformer_lens import HookedTransformer
+from functools import partial
 
 import train_test_chess
 from train_test_chess import Config, LinearProbeData
@@ -25,7 +27,7 @@ logging.basicConfig(level=log_level)
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 1
-MAXIMUM_TRAINING_GAMES = 500
+MAXIMUM_TRAINING_GAMES = 2000
 
 
 def check_tensor_values(tensor, tensor_name="Tensor"):
@@ -46,13 +48,31 @@ def check_tensor_values(tensor, tensor_name="Tensor"):
         tensor = tensor.to("mps")
 
 
+def add_hook_interventions(
+    model: HookedTransformer, previous_activations: dict[int, torch.Tensor], scale: float = 0.25
+) -> HookedTransformer:
+    """Add hooks to the model to intervene in the forward pass."""
+
+    model.reset_hooks()
+
+    def flip_hook(resid, hook, flip_dir: torch.Tensor):
+        resid[:, :] += scale * flip_dir
+
+    for layer, activation in previous_activations.items():
+        temp_hook_fn = partial(flip_hook, flip_dir=activation)
+        hook_name = f"blocks.{layer}.hook_resid_post"
+        model.add_hook(hook_name, temp_hook_fn)
+
+    return model
+
+
 @torch.no_grad()
 def create_contrastive_activations(
     activation_name: str,
     probe_data: LinearProbeData,
     config: Config,
     logging_dict: dict,
-):
+) -> torch.Tensor:
     assert logging_dict["split"] == "train", "Don't train on the test set"
 
     num_games = (MAXIMUM_TRAINING_GAMES // BATCH_SIZE) * BATCH_SIZE
@@ -95,8 +115,6 @@ def create_contrastive_activations(
             # Append the result to the list
             indexed_resid_posts.append(indexed_resid_post)
 
-        # Stack the indexed state stacks along the first dimension
-        # This results in a tensor of shape [2, 61, 8, 8] (assuming all batches have 61 indices)
         resid_post = torch.stack(indexed_resid_posts)  # shape (batch, num_white_moves, d_model)
         summed_resid_post = einops.reduce(
             resid_post, "batch indices model_dim -> batch model_dim", "sum"
@@ -142,6 +160,8 @@ def create_contrastive_activations(
     logger.info(f"Saving activations to {output_location}")
     torch.save(logging_dict, output_location)
 
+    return difference_vector
+
 
 MODEL_DIR = "models/"
 DATA_DIR = "data/"
@@ -156,7 +176,7 @@ config = train_test_chess.skill_config
 
 # Sweep over layers, levels of interest, pos_start, and dataset_prefix
 
-layers = range(11, 15, 1)
+layers = range(10, 15, 1)
 levels_of_interest = [[0, 5]]
 pos_starts = [25]
 
@@ -166,7 +186,9 @@ caa_type = "cascade"
 cascade_layers = ""
 
 if caa_type == "cascade":
-    cascade_layers = [f"{str(layer)}_" for layer in layers]
+    cascade_layers += "".join([f"{layer}_" for layer in layers])
+
+previous_layer_activations = {}
 
 for (
     layer,
@@ -206,4 +228,11 @@ for (
         config, probe_data, split, dataset_prefix, model_name, n_layers
     )
 
-    create_contrastive_activations(activation_name, probe_data, config, logging_dict)
+    if caa_type == "cascade":
+        probe_data.model = add_hook_interventions(
+            probe_data.model, previous_layer_activations, scale=0.1
+        )
+
+    previous_layer_activations[layer] = create_contrastive_activations(
+        activation_name, probe_data, config, logging_dict
+    )
