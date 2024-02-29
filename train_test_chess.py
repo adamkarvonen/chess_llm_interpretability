@@ -111,8 +111,10 @@ class Config:
     levels_of_interest: Optional[list[int]] = None
     column_name: str = None
     probing_for_skill: bool = False
-    pos_start: int = 0
     # pos_start indexes into custom_indexing_function. Example: if pos_start = 25, for find_dots_indices, selects everything after the first 25 moves
+    pos_start: int = 0
+    # If pos_end is None, it's set to the length of the shortest game in construct_linear_probe_data()
+    pos_end: Optional[int] = None
 
 
 piece_config = Config(
@@ -307,7 +309,9 @@ def prepare_data_batch(
     games_str = [probe_data.board_seqs_string[idx] for idx in list_of_indices]
     games_str = [s[:] for s in games_str]
     games_dots = probe_data.custom_indices[indices]
-    games_dots = games_dots[:, config.pos_start :]  # games_dots shape (batch_size, num_white_moves)
+    games_dots = games_dots[
+        :, config.pos_start : config.pos_end
+    ]  # games_dots shape (batch_size, num_white_moves)
 
     if config.probing_for_skill:
         games_skill = probe_data.skill_stack[indices]  # games_skill shape (batch_size,)
@@ -617,6 +621,9 @@ def construct_linear_probe_data(
 
     _, shortest_game_length_in_moves = custom_indices.shape
     assert custom_indices.shape == (num_games, shortest_game_length_in_moves)
+
+    if not config.pos_end:
+        config.pos_end = shortest_game_length_in_moves
 
     probe_data = LinearProbeData(
         layer=layer,
