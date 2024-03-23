@@ -36,6 +36,20 @@ To perform skill interventions, you can train a set of 8 skill probes using `tra
 
 Then, follow these directions to use them to perform skill interventions: https://github.com/adamkarvonen/chess_gpt_eval/tree/master/nanogpt
 
+# Useful links
+
+All code, models, and datasets are open source.
+
+To play the nanoGPT model against Stockfish, please visit: https://github.com/adamkarvonen/chess_gpt_eval/tree/master/nanogpt
+
+To train a Chess-GPT from scratch, please visit: https://github.com/adamkarvonen/nanoGPT
+
+All pretrained models are available here: https://huggingface.co/adamkarvonen/chess_llms
+
+All datasets are available here: https://huggingface.co/datasets/adamkarvonen/chess_games
+
+Wandb training loss curves and model configs can be viewed here: https://api.wandb.ai/links/adam-karvonen/u783xspb
+
 # References
 
 Much of my linear probing was developed using Neel Nanda's linear probing code as a reference. Here are the main references I used:
