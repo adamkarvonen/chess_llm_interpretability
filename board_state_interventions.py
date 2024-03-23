@@ -615,8 +615,6 @@ def perform_board_interventions(
                             target = average_piece_values[layer] + scale
                         else:
                             target = scale
-
-                        target -= 2
                         scale = calculate_scale_coefficient(
                             resid[0, move_of_interest_index, :],
                             flip_dir,
