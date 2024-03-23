@@ -44,7 +44,7 @@ DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 MODEL_PREFIX = "lichess_"
 # MODEL_PREFIX = ""
-SAVED_PROBE_DIR = f"linear_probes/{MODEL_PREFIX}{GPT_LAYER_COUNT}layer_piece_probe_sweep/"
+SAVED_PROBE_DIR = f"linear_probes/"
 RECORDING_DIR = "intervention_logs/"
 SPLIT = "test"
 MODES = 1  # Currently only supporting 1 mode so this is fairly unnecessary
@@ -53,6 +53,7 @@ END_POS = 30
 BLANK_INDEX = chess_utils.PIECE_TO_ONE_HOT_MAPPING[0]
 SAMPLING_MOVES = 5
 TEMPERATURE = 1.0
+MAX_GAMES = 5000
 
 DEVICE = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -407,9 +408,9 @@ def calculate_probe_outputs(
 def calculate_scale_coefficient(
     model_activations: Float[Tensor, "d_model"],
     flip_dir: Float[Tensor, "d_model"],
-    probe: Float[Tensor, "modes d_model rows cols options"],
+    probe: Float[Tensor, "d_model"],
     target: float,
-) -> float:
+) -> Tensor:
     """Find the scale coefficient that will result in the linear probe output being equal to the target value."""
     left_side = torch.dot(model_activations, probe) - target
     right_side = torch.dot(flip_dir, probe)
@@ -614,25 +615,27 @@ def perform_board_interventions(
                             target = average_piece_values[layer] + scale
                         else:
                             target = scale
+
+                        target -= 2
                         scale = calculate_scale_coefficient(
                             resid[0, move_of_interest_index, :],
                             flip_dir,
                             piece_probe,
-                            target,
+                            float(target),
                         )
                         # scale = min(0.3, scale)
+                        # print(target, scale)
 
-                    if layer < GPT_LAYER_COUNT:
-                        # We want to intervene on multiple positions in the sequence because a move is multiple tokens
-                        resid[:, :] -= scale * flip_dir
+                    resid[0, -1] -= scale * flip_dir
 
-                    coeff = resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
+                    # For experimentation with dynamic scale setting
+                    # coeff = resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
 
                     # So we only print once during inference
-                    if resid.shape[1] <= move_of_interest_index + 1:
-                        logger.debug(
-                            f"Layer: {layer}, coeff: {coeff:10.3f}, scale: {scale:10.3f}, target: {target:10.3f}"
-                        )
+                    # if resid.shape[1] <= move_of_interest_index + 1:
+                    #     print(
+                    #         f"Layer: {layer}, coeff: {coeff:10.3f}, scale: {scale:10.3f}, target: {target:10.3f}"
+                    #     )
 
                 # Step 6: Intervene on the model's activations and get the model move under the modified board state
                 probe_data.model.reset_hooks()
@@ -691,6 +694,8 @@ def perform_board_interventions(
             move_counters = update_move_counters_best_per_move(
                 move_counters, per_move_scale_tracker
             )
+        if move_counters.possible_moves > MAX_GAMES:
+            break
 
     # After intervening on all moves in all games, save output_tracker and move_counters to disk
     if track_outputs:
@@ -712,52 +717,30 @@ def perform_board_interventions(
 
 
 scales_lookup = {
-    #     # InterventionType.SINGLE_SCALE: np.arange(0.05, 0.16, 0.05),
-    #     # InterventionType.SINGLE_SCALE: np.arange(0.1, 0.16, 0.1),
-    InterventionType.SINGLE_SCALE: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0],
-    #     # InterventionType.SINGLE_SCALE: [0.5, 0.75, 1.0],
-    #     # InterventionType.SINGLE_SCALE: [1.5, 2.5, 4.0],
-    #     # InterventionType.SINGLE_SCALE: [0.3, 0.5],
-    # InterventionType.SINGLE_TARGET: np.arange(-5.0, -21.1, -5.0),
-    InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -4.0),
-    InterventionType.SINGLE_TARGET: np.arange(-2.0, -18.1, -4.0),
-    #
-}
-
-scales_lookup = {
-    InterventionType.SINGLE_SCALE: [1.1, 1.2, 1.3],
+    InterventionType.SINGLE_SCALE: [1.5],
+    # InterventionType.SINGLE_SCALE: [0.01, 0.1, 0.3, 0.5, 0.7, 1.0, 1.2, 1.5, 2.0, 3.0, 4.0],
     InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
-    InterventionType.SINGLE_TARGET: [-9, -10, -11],
+    # InterventionType.SINGLE_TARGET: [-9, -10],
+    InterventionType.SINGLE_TARGET: [-9],
 }
-
-# scales_lookup = {
-#     InterventionType.SINGLE_SCALE: np.arange(1.5, 6.1, 1.5),
-#     InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
-#     InterventionType.SINGLE_TARGET: np.arange(-2.0, -20.1, -5.0),
-# }
 
 intervention_types = [
     InterventionType.SINGLE_SCALE,
     # InterventionType.AVERAGE_TARGET,
-    InterventionType.SINGLE_TARGET,
+    # InterventionType.SINGLE_TARGET,
 ]
 
 sampling_type = SamplingType.BOTH
 
-num_games = 4
+num_games = 200
 
 for intervention_type in intervention_types:
 
     probe_names = {}
-    first_layer = 2
+    first_layer = 3
     last_layer = 6
 
-    # The last layer in the model has an average empty value about 2x of all other layers
-    # For simplicity, we will exclude the last layer from the intervention
-    # if intervention_type == InterventionType.SINGLE_TARGET:
-    #     last_layer = 6
-
-    for i in range(first_layer, last_layer + 1):
+    for i in range(first_layer, last_layer + 1, 1):
         probe_names[i] = (
             f"tf_lens_lichess_{GPT_LAYER_COUNT}layers_ckpt_no_optimizer_chess_piece_probe_layer_{i}.pth"
         )
