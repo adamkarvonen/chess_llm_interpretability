@@ -828,37 +828,40 @@ if __name__ == "__main__":
         else:
             config = skill_config
 
-        # When training a probe, you have to set all parameters such as model name, dataset prefix, etc.
-        dataset_prefix = "lichess_"
-        # dataset_prefix = "stockfish_"
-        layer = 5
-        split = "train"
-        n_layers = 8
-        model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
+        first_layer = 0
+        last_layer = 8
 
-        # If probing for skill, set the levels of interest by default
-        if not USE_PIECE_BOARD_STATE:
-            config.levels_of_interest = [0, 5]
+        for layer in range(first_layer, last_layer):
 
-        input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-        config = set_config_min_max_vals_and_column_name(
-            config, input_dataframe_file, dataset_prefix
-        )
+            # When training a probe, you have to set all parameters such as model name, dataset prefix, etc.
+            dataset_prefix = "lichess_"
+            # dataset_prefix = "stockfish_"
+            split = "train"
+            n_layers = 8
+            model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
+            # If probing for skill, set the levels of interest by default
+            if not USE_PIECE_BOARD_STATE:
+                config.levels_of_interest = [0, 5]
 
-        max_games = TRAIN_PARAMS.max_train_games + TRAIN_PARAMS.max_val_games
-        probe_data = construct_linear_probe_data(
-            input_dataframe_file,
-            layer,
-            dataset_prefix,
-            n_layers,
-            model_name,
-            config,
-            max_games,
-            DEVICE,
-        )
+            input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
+            config = set_config_min_max_vals_and_column_name(
+                config, input_dataframe_file, dataset_prefix
+            )
 
-        logging_dict = init_logging_dict(
-            config, probe_data, split, dataset_prefix, model_name, n_layers
-        )
+            max_games = TRAIN_PARAMS.max_train_games + TRAIN_PARAMS.max_val_games
+            probe_data = construct_linear_probe_data(
+                input_dataframe_file,
+                layer,
+                dataset_prefix,
+                n_layers,
+                model_name,
+                config,
+                max_games,
+                DEVICE,
+            )
 
-        train_linear_probe_cross_entropy(probe_data, config, logging_dict)
+            logging_dict = init_logging_dict(
+                config, probe_data, split, dataset_prefix, model_name, n_layers
+            )
+
+            train_linear_probe_cross_entropy(probe_data, config, logging_dict)
