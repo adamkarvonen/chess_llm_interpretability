@@ -181,7 +181,7 @@ levels_of_interest = [[0, 5]]
 pos_starts = [25]
 
 caa_type = "simple"
-caa_type = "cascade"
+# caa_type = "cascade"
 
 cascade_layers = ""
 
@@ -230,7 +230,7 @@ for (
 
     if caa_type == "cascade":
         probe_data.model = add_hook_interventions(
-            probe_data.model, previous_layer_activations, scale=0.1
+            probe_data.model, previous_layer_activations, scale=0.15
         )
 
     previous_layer_activations[layer] = create_contrastive_activations(
