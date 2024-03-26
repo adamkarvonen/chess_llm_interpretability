@@ -48,7 +48,6 @@ MODEL_DIR = "models/"
 DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 SAVED_PROBE_DIR = "linear_probes/saved_probes/"
-SAVED_PROBE_DIR = "linear_probes/15mbs200_skill_probe_sweep/"
 WANDB_PROJECT = "chess_linear_probes"
 BATCH_SIZE = 2
 D_MODEL = 512
