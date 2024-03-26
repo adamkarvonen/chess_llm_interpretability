@@ -48,8 +48,11 @@ MODEL_DIR = "models/"
 DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
 SAVED_PROBE_DIR = "linear_probes/saved_probes/"
+SAVED_PROBE_DIR = "linear_probes/15mbs200_skill_probe_sweep/"
 WANDB_PROJECT = "chess_linear_probes"
 BATCH_SIZE = 2
+D_MODEL = 512
+N_HEADS = 8
 
 DEVICE = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -166,10 +169,10 @@ def get_transformer_lens_model(
 ) -> HookedTransformer:
     cfg = HookedTransformerConfig(
         n_layers=n_layers,
-        d_model=512,
-        d_head=64,
-        n_heads=8,
-        d_mlp=2048,
+        d_model=D_MODEL,
+        d_head=int(D_MODEL / N_HEADS),
+        n_heads=N_HEADS,
+        d_mlp=D_MODEL * 4,
         d_vocab=32,
         n_ctx=1023,
         act_fn="gelu",
@@ -773,6 +776,9 @@ if __name__ == "__main__":
 
         print(saved_probes)
 
+        # NOTE: This is very inefficient. The expensive part is forwarding the GPT, which we should only have to do once.
+        # With little effort, we could test probes on all layers at once. This would be much faster.
+        # But, I can test the probes in a 20 minutes and it was a one-off thing, so I didn't bother.
         for probe_to_test in saved_probes:
             probe_file_location = f"{SAVED_PROBE_DIR}{probe_to_test}"
             # We will populate all parameters using information in the probe state dict
@@ -831,6 +837,9 @@ if __name__ == "__main__":
         first_layer = 0
         last_layer = 8
 
+        # NOTE: This is very inefficient. The expensive part is forwarding the GPT, which we should only have to do once.
+        # With little effort, we could train probes on all layers at once. This would be much faster.
+        # But, I trained the probes in an hour and it was a one-off thing, so I didn't bother.
         for layer in range(first_layer, last_layer):
 
             # When training a probe, you have to set all parameters such as model name, dataset prefix, etc.

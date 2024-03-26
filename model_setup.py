@@ -24,8 +24,10 @@ MODEL_DIR = "models/"
 
 n_heads = 8
 n_layers = 8
+d_model = 512
 
 model_name = f"lichess_{n_layers}layers_ckpt_no_optimizer.pt"
+
 
 assert str(n_layers) in model_name
 
@@ -136,10 +138,10 @@ if LOAD_AND_CONVERT_CHECKPOINT:
 
     cfg = HookedTransformerConfig(
         n_layers=n_layers,
-        d_model=512,
-        d_head=64,
+        d_model=d_model,
+        d_head=int(d_model / n_heads),
         n_heads=n_heads,
-        d_mlp=2048,
+        d_mlp=d_model * 4,
         d_vocab=32,
         n_ctx=1023,
         act_fn="gelu",
