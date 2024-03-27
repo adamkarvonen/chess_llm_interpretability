@@ -1,16 +1,12 @@
 # %%
-import transformer_lens.utils as utils
 from transformer_lens import HookedTransformer, HookedTransformerConfig
 import einops
 import torch
 from tqdm import tqdm
 import numpy as np
 from fancy_einsum import einsum
-import chess
 import numpy as np
-import csv
-from dataclasses import dataclass
-from torch.nn import MSELoss, L1Loss
+from dataclasses import dataclass, field
 import pandas as pd
 import pickle
 import os
@@ -19,6 +15,7 @@ from typing import Optional
 from jaxtyping import Int, Float, jaxtyped
 from torch import Tensor
 from beartype import beartype
+import collections
 
 import chess_utils
 
@@ -102,6 +99,19 @@ TRAIN_PARAMS = TrainingParams()
 
 
 @dataclass
+class SingleProbe:
+    linear_probe: torch.Tensor
+    probe_name: str
+    optimiser: torch.optim.AdamW
+    logging_dict: dict
+    loss: torch.Tensor = torch.tensor(0.0)
+    accuracy: torch.Tensor = torch.tensor(0.0)
+    accuracy_queue: collections.deque = field(
+        default_factory=lambda: collections.deque(maxlen=1000)
+    )
+
+
+@dataclass
 class Config:
     min_val: int
     max_val: int
@@ -154,7 +164,6 @@ skill_config = Config(
 
 @dataclass
 class LinearProbeData:
-    layer: int
     model: HookedTransformer
     custom_indices: torch.tensor
     board_seqs_int: torch.tensor
@@ -211,6 +220,7 @@ def process_dataframe(
 
 
 def init_logging_dict(
+    layer: int,
     config: Config,
     probe_data: LinearProbeData,
     split: str,
@@ -221,7 +231,7 @@ def init_logging_dict(
 
     indexing_function_name = config.custom_indexing_function.__name__
 
-    wandb_run_name = f"{config.linear_probe_name}_{model_name}_layer_{probe_data.layer}_indexing_{indexing_function_name}_max_games_{TRAIN_PARAMS.max_train_games}"
+    wandb_run_name = f"{config.linear_probe_name}_{model_name}_layer_{layer}_indexing_{indexing_function_name}_max_games_{TRAIN_PARAMS.max_train_games}"
     if config.levels_of_interest is not None:
         wandb_run_name += "_levels"
         for level in config.levels_of_interest:
@@ -229,7 +239,7 @@ def init_logging_dict(
 
     logging_dict = {
         "linear_probe_name": config.linear_probe_name,
-        "layer": probe_data.layer,
+        "layer": layer,
         "indexing_function_name": indexing_function_name,
         "batch_size": BATCH_SIZE,
         "lr": TRAIN_PARAMS.lr,
@@ -301,10 +311,13 @@ def get_custom_indices(
 
 @jaxtyped(typechecker=beartype)
 def prepare_data_batch(
-    indices: Int[Tensor, "batch_size"], probe_data: LinearProbeData, config: Config
+    indices: Int[Tensor, "batch_size"],
+    probe_data: LinearProbeData,
+    config: Config,
+    layers: list[int],
 ) -> tuple[
     Int[Tensor, "modes batch_size num_white_moves num_rows num_cols num_options"],
-    Float[Tensor, "batch_size num_white_moves d_model"],
+    dict[int, Float[Tensor, "batch_size num_white_moves d_model"]],
 ]:
     list_of_indices = indices.tolist()  # For indexing into the board_seqs_string list of strings
     games_int = probe_data.board_seqs_int[indices]  # games_int shape (batch_size, pgn_str_length)
@@ -358,28 +371,37 @@ def prepare_data_batch(
         DEVICE
     )  # shape (modes, batch_size, num_white_moves, num_rows, num_cols, num_options)
 
+    resid_post_dict = {}
+
     with torch.inference_mode():
         _, cache = probe_data.model.run_with_cache(games_int.to(DEVICE)[:, :-1], return_type=None)
-        resid_post = cache["resid_post", probe_data.layer][
-            :, :
-        ]  # shape (batch_size, pgn_str_length - 1, d_model)
-    # Initialize a list to hold the indexed state stacks
-    indexed_resid_posts = []
+        for layer in layers:
+            resid_post_dict[layer] = cache["resid_post", layer][
+                :, :
+            ]  # shape (batch_size, pgn_str_length - 1, d_model)
 
-    for batch_idx in range(games_dots.size(0)):
-        # Get the indices for the current batch
-        dots_indices_for_batch = games_dots[batch_idx]
+    # Not the most efficient way to do this, but it's clear and readable
+    for layer in layers:
+        resid_post = resid_post_dict[layer]
+        # Initialize a list to hold the indexed state stacks
+        indexed_resid_posts = []
 
-        # Index the state_stack for the current batch
-        indexed_resid_post = resid_post[batch_idx, dots_indices_for_batch]
+        for batch_idx in range(games_dots.size(0)):
+            # Get the indices for the current batch
+            dots_indices_for_batch = games_dots[batch_idx]
 
-        # Append the result to the list
-        indexed_resid_posts.append(indexed_resid_post)
+            # Index the state_stack for the current batch
+            indexed_resid_post = resid_post[batch_idx, dots_indices_for_batch]
 
-    # Stack the indexed state stacks along the first dimension
-    resid_post = torch.stack(indexed_resid_posts)  # shape (batch_size, num_white_moves, d_model)
+            # Append the result to the list
+            indexed_resid_posts.append(indexed_resid_post)
 
-    return state_stack_one_hot, resid_post
+        # Stack the indexed state stacks along the first dimension
+        resid_post_dict[layer] = torch.stack(
+            indexed_resid_posts
+        )  # shape (batch_size, num_white_moves, d_model)
+
+    return state_stack_one_hot, resid_post_dict
 
 
 @jaxtyped(typechecker=beartype)
@@ -422,12 +444,16 @@ def linear_probe_forward_pass(
 def estimate_loss(
     train_games: int,
     val_games: int,
-    linear_probe: Float[Tensor, "modes d_model rows cols options"],
+    probes: dict[int, SingleProbe],
     probe_data: LinearProbeData,
     config: Config,
     one_hot_range: int,
-) -> dict[str, dict[str, float]]:
-    out = {"train": {"loss": 0, "accuracy": 0}, "val": {"loss": 0, "accuracy": 0}}
+    layers: list[int],
+) -> dict[int, dict[str, dict[str, float]]]:
+    out = {}
+
+    for layer in probes:
+        out[layer] = {"train": {"loss": 0, "accuracy": 0}, "val": {"loss": 0, "accuracy": 0}}
 
     eval_iters = (TRAIN_PARAMS.eval_iters // BATCH_SIZE) * BATCH_SIZE
 
@@ -437,31 +463,44 @@ def estimate_loss(
 
     split_indices = {"train": train_indices, "val": val_indices}
     for split in split_indices:
-        losses = torch.zeros(eval_iters)
-        accuracies = torch.zeros(eval_iters)
+        losses = {}
+        accuracies = {}
+        for layer in probes:
+            losses[layer] = []
+            accuracies[layer] = []
         for k in range(0, eval_iters, BATCH_SIZE):
             indices = split_indices[split][k : k + BATCH_SIZE]
 
-            state_stack_one_hot, resid_post = prepare_data_batch(indices, probe_data, config)
-
-            loss, accuracy = linear_probe_forward_pass(
-                linear_probe, state_stack_one_hot, resid_post, one_hot_range
+            state_stack_one_hot, resid_post_dict = prepare_data_batch(
+                indices, probe_data, config, layers
             )
-            losses[k : k + BATCH_SIZE] = loss.item()
-            accuracies[k : k + BATCH_SIZE] = accuracy.item()
-        out[split]["loss"] = losses.mean()
-        out[split]["accuracy"] = accuracies.mean()
+
+            for layer in probes:
+                loss, accuracy = linear_probe_forward_pass(
+                    probes[layer].linear_probe,
+                    state_stack_one_hot,
+                    resid_post_dict[layer],
+                    one_hot_range,
+                )
+                losses[layer].append(loss.item())
+                accuracies[layer].append(accuracy.item())
+        for layer in layers:
+            out[layer][split]["loss"] = sum(losses[layer]) / len(losses[layer])
+            out[layer][split]["accuracy"] = sum(accuracies[layer]) / len(accuracies[layer])
     return out
 
 
 # %%
 def train_linear_probe_cross_entropy(
+    probes: dict[int, SingleProbe],
     probe_data: LinearProbeData,
     config: Config,
-    logging_dict: dict,
 ):
+    first_layer = min(probes.keys())
+    layers = list(probes.keys())
+    all_layers_str = "_".join([str(layer) for layer in layers])
     """Trains a linear probe on the train set, contained in probe_data."""
-    assert logging_dict["split"] == "train", "Don't train on the test set"
+    assert probes[first_layer].logging_dict["split"] == "train", "Don't train on the test set"
 
     val_games = (TRAIN_PARAMS.max_val_games // BATCH_SIZE) * BATCH_SIZE
     train_games = (TRAIN_PARAMS.max_train_games // BATCH_SIZE) * BATCH_SIZE
@@ -473,112 +512,136 @@ def train_linear_probe_cross_entropy(
         # We raise an error so it doesn't fail silently. If we want to use less games, we can comment the error out
         # and add some logic to set train and val games to the number of games we have
 
-    logging_dict["num_games"] = num_games
-
     one_hot_range = config.max_val - config.min_val + 1
     if config.levels_of_interest is not None:
         one_hot_range = len(config.levels_of_interest)
 
-    linear_probe_name = (
-        f"{PROBE_DIR}{model_name}_{config.linear_probe_name}_layer_{probe_data.layer}.pth"
-    )
-    linear_probe = torch.randn(
-        TRAIN_PARAMS.modes,
-        probe_data.model.cfg.d_model,
-        config.num_rows,
-        config.num_cols,
-        one_hot_range,
-        requires_grad=False,
-        device=DEVICE,
-    ) / np.sqrt(probe_data.model.cfg.d_model)
-    linear_probe.requires_grad = True
-    logger.info(f"linear_probe shape: {linear_probe.shape}")
+    for layer in probes:
+        linear_probe_name = f"{PROBE_DIR}{model_name}_{config.linear_probe_name}_layer_{layer}.pth"
+        linear_probe = torch.randn(
+            TRAIN_PARAMS.modes,
+            probe_data.model.cfg.d_model,
+            config.num_rows,
+            config.num_cols,
+            one_hot_range,
+            requires_grad=False,
+            device=DEVICE,
+        ) / np.sqrt(probe_data.model.cfg.d_model)
+        linear_probe.requires_grad = True
+        probes[layer].linear_probe = linear_probe
+        probes[layer].probe_name = linear_probe_name
+        logger.info(f"linear_probe shape: {linear_probe.shape}")
 
-    optimiser = torch.optim.AdamW(
-        [linear_probe],
-        lr=TRAIN_PARAMS.lr,
-        betas=(TRAIN_PARAMS.beta1, TRAIN_PARAMS.beta2),
-        weight_decay=TRAIN_PARAMS.wd,
-    )
+        probes[layer].logging_dict["num_games"] = num_games
 
-    logger.info(f"custom_indices shape: {probe_data.custom_indices.shape}")
+        optimiser = torch.optim.AdamW(
+            [linear_probe],
+            lr=TRAIN_PARAMS.lr,
+            betas=(TRAIN_PARAMS.beta1, TRAIN_PARAMS.beta2),
+            weight_decay=TRAIN_PARAMS.wd,
+        )
+
+        probes[layer].optimiser = optimiser
 
     if wandb_logging:
         import wandb
 
         wandb.init(
             project=WANDB_PROJECT,
-            name=logging_dict["wandb_run_name"],
-            config=logging_dict,
+            name=f"layers:{all_layers_str}_" + probes[first_layer].logging_dict["wandb_run_name"],
+            config=probes[first_layer].logging_dict,
         )
 
+    logger.info(f"custom_indices shape: {probe_data.custom_indices.shape}")
+
     current_iter = 0
-    loss = 0
-    accuracy = 0
     for epoch in range(TRAIN_PARAMS.num_epochs):
         full_train_indices = torch.randperm(train_games)
         for i in tqdm(range(0, train_games, BATCH_SIZE)):
 
             indices = full_train_indices[i : i + BATCH_SIZE]  # shape batch_size
 
-            state_stack_one_hot, resid_post = prepare_data_batch(indices, probe_data, config)
-
-            loss, accuracy = linear_probe_forward_pass(
-                linear_probe, state_stack_one_hot, resid_post, one_hot_range
+            state_stack_one_hot, resid_post_dict = prepare_data_batch(
+                indices, probe_data, config, layers
             )
 
-            loss.backward()
+            for layer in probes:
+
+                probes[layer].loss, probes[layer].accuracy = linear_probe_forward_pass(
+                    probes[layer].linear_probe,
+                    state_stack_one_hot,
+                    resid_post_dict[layer],
+                    one_hot_range,
+                )
+
+                probes[layer].loss.backward()
+                probes[layer].optimiser.step()
+                probes[layer].optimiser.zero_grad()
+
+                probes[layer].accuracy_queue.append(probes[layer].accuracy.item())
+
             if i % 100 == 0:
-                logger.info(f"epoch {epoch}, batch {i}, acc {accuracy}, loss {loss}")
+                log_str = f"epoch {epoch}, iter {i}, "
                 if wandb_logging:
                     wandb.log(
                         {
-                            "acc": accuracy,
-                            "loss": loss,
                             "epoch": epoch,
                             "iter": current_iter,
                         }
                     )
+                for layer in probes:
+                    avg_acc = sum(probes[layer].accuracy_queue) / len(probes[layer].accuracy_queue)
+                    log_str += f"layer {layer}, acc {probes[layer].accuracy:.3f}, loss {probes[layer].loss:.3f}, avg acc {avg_acc:.3f}, "
+                    if wandb_logging:
+                        wandb.log(
+                            {
+                                f"layer_{layer}_loss": probes[layer].loss,
+                                f"layer_{layer}_acc": probes[layer].accuracy,
+                                f"layer_{layer}_avg_acc": avg_acc,
+                            }
+                        )
+                logger.info(log_str)
 
-            optimiser.step()
-            optimiser.zero_grad()
             current_iter += BATCH_SIZE
 
             if current_iter % 1000 == 0:
                 losses = estimate_loss(
                     train_games,
                     val_games,
-                    linear_probe,
+                    probes,
                     probe_data,
                     config,
                     one_hot_range,
+                    layers,
                 )
-                logger.info(f"epoch {epoch}, losses: {losses}, accuracy: {accuracy}")
-                if wandb_logging:
-                    wandb.log(
-                        {
-                            "train_loss": losses["train"]["loss"],
-                            "train_acc": losses["train"]["accuracy"],
-                            "val_loss": losses["val"]["loss"],
-                            "val_acc": losses["val"]["accuracy"],
-                            "epoch": epoch,
-                        }
+                for layer in probes:
+                    logger.info(
+                        f"epoch {epoch}, layer {layer}, train loss: {losses[layer]['train']['loss']:.3f}, val loss: {losses[layer]['val']['loss']:.3f}, train acc: {losses[layer]['train']['accuracy']:.3f}, val acc: {losses[layer]['val']['accuracy']:.3f}"
                     )
-    checkpoint = {
-        "linear_probe": linear_probe,
-        "final_loss": loss,
-        "iters": current_iter,
-        "epochs": epoch,
-        "acc": accuracy,
-    }
-    # Update the checkpoint dictionary with the contents of logging_dict
-    checkpoint.update(logging_dict)
-    torch.save(checkpoint, linear_probe_name)
+                    if wandb_logging:
+                        wandb.log(
+                            {
+                                f"layer_{layer}_train_loss": losses[layer]["train"]["loss"],
+                                f"layer_{layer}_train_acc": losses[layer]["train"]["accuracy"],
+                                f"layer_{layer}_val_loss": losses[layer]["val"]["loss"],
+                                f"layer_{layer}_val_acc": losses[layer]["val"]["accuracy"],
+                            }
+                        )
+    for layer in probes:
+        checkpoint = {
+            "linear_probe": probes[layer].linear_probe,
+            "final_loss": probes[layer].loss,
+            "iters": current_iter,
+            "epochs": epoch,
+            "acc": probes[layer].accuracy,
+        }
+        # Update the checkpoint dictionary with the contents of logging_dict
+        checkpoint.update(probes[layer].logging_dict)
+        torch.save(checkpoint, probes[layer].probe_name)
 
 
 def construct_linear_probe_data(
     input_dataframe_file: str,
-    layer: int,
     dataset_prefix: str,
     n_layers: int,
     model_name: str,
@@ -628,7 +691,6 @@ def construct_linear_probe_data(
         config.pos_end = shortest_game_length_in_moves
 
     probe_data = LinearProbeData(
-        layer=layer,
         model=model,
         custom_indices=custom_indices,
         board_seqs_int=board_seqs_int,
@@ -687,6 +749,10 @@ def test_linear_probe_cross_entropy(
     logger.info(f"linear_probe shape: {linear_probe.shape}")
     logger.info(f"custom_indices shape: {probe_data.custom_indices.shape}")
 
+    layer = logging_dict["layer"]
+    probes = {layer: SingleProbe(linear_probe, "", None, logging_dict)}
+    layers = list(probes.keys())
+
     current_iter = 0
     loss = 0
     accuracy = 0
@@ -697,10 +763,12 @@ def test_linear_probe_cross_entropy(
         for i in tqdm(range(0, num_games, BATCH_SIZE)):
             indices = full_test_indices[i : i + BATCH_SIZE]  # shape batch_size
 
-            state_stack_one_hot, resid_post = prepare_data_batch(indices, probe_data, config)
+            state_stack_one_hot, resid_post_dict = prepare_data_batch(
+                indices, probe_data, config, layers
+            )
 
             loss, accuracy = linear_probe_forward_pass(
-                linear_probe, state_stack_one_hot, resid_post, one_hot_range
+                linear_probe, state_stack_one_hot, resid_post_dict[layer], one_hot_range
             )
 
             accuracy_list.append(accuracy.item())
@@ -753,10 +821,8 @@ USE_PIECE_BOARD_STATE = True  # We will test or train a probe for piece board st
 
 # If training a probe, make sure to set the below parameters in the else block
 
-saved_piece_probe_name = (
-    "tf_lens_lichess_16layers_ckpt_no_optimizer_chess_piece_probe_layer_12_pos_start_0.pth"
-)
-saved_skill_probe_name = "tf_lens_lichess_16layers_ckpt_no_optimizer_chess_skill_probe_layer_12.pth"
+saved_piece_probe_name = "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_5.pth"
+saved_skill_probe_name = "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_skill_probe_layer_5.pth"
 
 if __name__ == "__main__":
     if RUN_TEST_SET:
@@ -777,7 +843,10 @@ if __name__ == "__main__":
 
         # NOTE: This is very inefficient. The expensive part is forwarding the GPT, which we should only have to do once.
         # With little effort, we could test probes on all layers at once. This would be much faster.
-        # But, I can test the probes in a 20 minutes and it was a one-off thing, so I didn't bother.
+        # But, I can test the probes in 20 minutes and it was a one-off thing, so I didn't bother.
+        # My strategy for development / hyperparameter testing was to iterate on the train side, then do the final test on the test side.
+        # As long as you have a reasonable training dataset size, you should be able to get a good idea of final test accuracy
+        # by looking at the training accuracy after a few epochs.
         for probe_to_test in saved_probes:
             probe_file_location = f"{SAVED_PROBE_DIR}{probe_to_test}"
             # We will populate all parameters using information in the probe state dict
@@ -809,7 +878,6 @@ if __name__ == "__main__":
 
                 probe_data = construct_linear_probe_data(
                     input_dataframe_file,
-                    layer,
                     dataset_prefix,
                     n_layers,
                     model_name,
@@ -819,7 +887,7 @@ if __name__ == "__main__":
                 )
 
                 logging_dict = init_logging_dict(
-                    config, probe_data, split, dataset_prefix, model_name, n_layers
+                    layer, config, probe_data, split, dataset_prefix, model_name, n_layers
                 )
 
                 test_linear_probe_cross_entropy(
@@ -836,40 +904,43 @@ if __name__ == "__main__":
         first_layer = 0
         last_layer = 8
 
-        # NOTE: This is very inefficient. The expensive part is forwarding the GPT, which we should only have to do once.
-        # With little effort, we could train probes on all layers at once. This would be much faster.
-        # But, I trained the probes in an hour and it was a one-off thing, so I didn't bother.
+        # When training a probe, you have to set all parameters such as model name, dataset prefix, etc.
+        dataset_prefix = "lichess_"
+        # dataset_prefix = "stockfish_"
+        split = "train"
+        n_layers = 8
+        model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
+        # If probing for skill, set the levels of interest by default
+        if not USE_PIECE_BOARD_STATE:
+            config.levels_of_interest = [0, 5]
+
+        input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
+        config = set_config_min_max_vals_and_column_name(
+            config, input_dataframe_file, dataset_prefix
+        )
+
+        max_games = TRAIN_PARAMS.max_train_games + TRAIN_PARAMS.max_val_games
+        probe_data = construct_linear_probe_data(
+            input_dataframe_file,
+            dataset_prefix,
+            n_layers,
+            model_name,
+            config,
+            max_games,
+            DEVICE,
+        )
+
+        probes = {}
         for layer in range(first_layer, last_layer):
-
-            # When training a probe, you have to set all parameters such as model name, dataset prefix, etc.
-            dataset_prefix = "lichess_"
-            # dataset_prefix = "stockfish_"
-            split = "train"
-            n_layers = 8
-            model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
-            # If probing for skill, set the levels of interest by default
-            if not USE_PIECE_BOARD_STATE:
-                config.levels_of_interest = [0, 5]
-
-            input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-            config = set_config_min_max_vals_and_column_name(
-                config, input_dataframe_file, dataset_prefix
+            probes[layer] = SingleProbe(
+                linear_probe=None,
+                probe_name=None,
+                optimiser=None,
+                logging_dict=init_logging_dict(
+                    layer, config, probe_data, split, dataset_prefix, model_name, n_layers
+                ),
+                loss=0.0,
+                accuracy=0.0,
             )
 
-            max_games = TRAIN_PARAMS.max_train_games + TRAIN_PARAMS.max_val_games
-            probe_data = construct_linear_probe_data(
-                input_dataframe_file,
-                layer,
-                dataset_prefix,
-                n_layers,
-                model_name,
-                config,
-                max_games,
-                DEVICE,
-            )
-
-            logging_dict = init_logging_dict(
-                config, probe_data, split, dataset_prefix, model_name, n_layers
-            )
-
-            train_linear_probe_cross_entropy(probe_data, config, logging_dict)
+        train_linear_probe_cross_entropy(probes, probe_data, config)
