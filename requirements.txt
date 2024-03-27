@@ -1,6 +1,6 @@
 transformer_lens == 1.10.0
 tqdm == 4.66.1
-torch > 2.1.0 # transformer lens cannot use 2.0.0 or 2.1.0
+torch == 2.2.0 # transformer lens cannot use 2.0.0 or 2.1.0
 # I have successfully used both torch 2.1.1 and 2.2.0
 jaxtyping == 0.2.25
 beartype == 0.14.1
@@ -13,3 +13,4 @@ pandas == 2.1.1
 plotly == 5.18.0
 matplotlib == 3.8.0
 nbformat == 5.9.2
+pytest == 8.1.1
