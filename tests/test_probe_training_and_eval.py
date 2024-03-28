@@ -144,7 +144,7 @@ def test_skill_train_linear_probe_cross_entropy():
         ), f"Accuracy mismatch for layer {layer}"
 
 
-def test_skill_train_linear_probe_cross_entropy():
+def test_linear_probe_cross_entropy_test():
 
     expected_results = {
         "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_5.pth": 0.99,
