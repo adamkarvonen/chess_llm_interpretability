@@ -52,7 +52,7 @@ Wandb training loss curves and model configs can be viewed here: https://api.wan
 
 # Testing
 
-To run the end to end test suite, run `pytest -s tests/test_probe_training_and_eval.py ` from the root directory. This will train and test probes end to end on the 8 layer model. It takes around 12 minutes. The `-s` flag is so you can see the training updates and gauge progress.
+To run the end to end test suite, run `pytest -s` from the root directory. This will train and test probes end to end on the 8 layer model, including comparing expected accuracy to actual accuracy within some tolerance. It takes around 12 minutes. The `-s` flag is so you can see the training updates and gauge progress.
 
 # References
 
