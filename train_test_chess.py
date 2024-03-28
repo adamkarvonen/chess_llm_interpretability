@@ -247,6 +247,7 @@ def init_logging_dict(
         "wd": train_params.wd,
         "pos_start": config.pos_start,
         "num_epochs": train_params.num_epochs,
+        "num_games": train_params.max_train_games,
         "modes": train_params.modes,
         "wandb_project": WANDB_PROJECT,
         "config_name": config.linear_probe_name,
@@ -405,6 +406,50 @@ def prepare_data_batch(
     return state_stack_one_hot, resid_post_dict
 
 
+def populate_probes_dict(
+    layers: list[int],
+    config: Config,
+    train_params: TrainingParams,
+    split,
+    dataset_prefix,
+    model_name,
+    n_layers,
+) -> dict[int, SingleProbe]:
+    probes = {}
+    for layer in layers:
+        linear_probe_name = (
+            f"{PROBE_DIR}{logging_dict['model_name']}_{config.linear_probe_name}_layer_{layer}.pth"
+        )
+        logging_dict = init_logging_dict(
+            layer, config, split, dataset_prefix, model_name, n_layers, TRAIN_PARAMS
+        )
+        linear_probe = torch.randn(
+            train_params.modes,
+            D_MODEL,
+            config.num_rows,
+            config.num_cols,
+            get_one_hot_range(config),
+            requires_grad=False,
+            device=DEVICE,
+        ) / np.sqrt(D_MODEL)
+        linear_probe.requires_grad = True
+        logger.info(f"linear_probe shape: {linear_probe.shape}")
+
+        optimiser = torch.optim.AdamW(
+            [linear_probe],
+            lr=train_params.lr,
+            betas=(train_params.beta1, train_params.beta2),
+            weight_decay=train_params.wd,
+        )
+        probes[layer] = SingleProbe(
+            linear_probe=linear_probe,
+            probe_name=linear_probe_name,
+            optimiser=optimiser,
+            logging_dict=logging_dict,
+        )
+    return probes
+
+
 @jaxtyped(typechecker=beartype)
 def linear_probe_forward_pass(
     linear_probe: Float[Tensor, "modes d_model rows cols options"],
@@ -441,6 +486,7 @@ def linear_probe_forward_pass(
 # helps estimate an arbitrarily accurate loss over either split using many batches
 # This is mainly useful for checking that the probe isn't overfitting to the train set
 # Note that I'm not doing a proper train/val split here, this was just a quick and dirty way to check for overfitting
+# You could disable this if using a training set with over 5k games, as there shouldn't be any overfitting
 @torch.no_grad()
 def estimate_loss(
     train_games: int,
@@ -518,36 +564,7 @@ def train_linear_probe_cross_entropy(
         # We raise an error so it doesn't fail silently. If we want to use less games, we can comment the error out
         # and add some logic to set train and val games to the number of games we have
 
-    one_hot_range = config.max_val - config.min_val + 1
-    if config.levels_of_interest is not None:
-        one_hot_range = len(config.levels_of_interest)
-
-    for layer in probes:
-        linear_probe_name = f"{PROBE_DIR}{probes[layer].logging_dict['model_name']}_{config.linear_probe_name}_layer_{layer}.pth"
-        linear_probe = torch.randn(
-            train_params.modes,
-            probe_data.model.cfg.d_model,
-            config.num_rows,
-            config.num_cols,
-            one_hot_range,
-            requires_grad=False,
-            device=DEVICE,
-        ) / np.sqrt(probe_data.model.cfg.d_model)
-        linear_probe.requires_grad = True
-        probes[layer].linear_probe = linear_probe
-        probes[layer].probe_name = linear_probe_name
-        logger.info(f"linear_probe shape: {linear_probe.shape}")
-
-        probes[layer].logging_dict["num_games"] = num_games
-
-        optimiser = torch.optim.AdamW(
-            [linear_probe],
-            lr=train_params.lr,
-            betas=(train_params.beta1, train_params.beta2),
-            weight_decay=train_params.wd,
-        )
-
-        probes[layer].optimiser = optimiser
+    one_hot_range = get_one_hot_range(config)
 
     if wandb_logging:
         import wandb
@@ -557,8 +574,6 @@ def train_linear_probe_cross_entropy(
             name=f"layers:{all_layers_str}_" + probes[first_layer].logging_dict["wandb_run_name"],
             config=probes[first_layer].logging_dict,
         )
-
-    logger.info(f"custom_indices shape: {probe_data.custom_indices.shape}")
 
     current_iter = 0
     for epoch in range(train_params.num_epochs):
@@ -587,7 +602,6 @@ def train_linear_probe_cross_entropy(
                 probes[layer].accuracy_queue.append(probes[layer].accuracy.item())
 
             if i % 100 == 0:
-                log_str = f"epoch {epoch}, iter {i}, "
                 if wandb_logging:
                     wandb.log(
                         {
@@ -597,7 +611,9 @@ def train_linear_probe_cross_entropy(
                     )
                 for layer in probes:
                     avg_acc = sum(probes[layer].accuracy_queue) / len(probes[layer].accuracy_queue)
-                    log_str += f"layer {layer}, acc {probes[layer].accuracy:.3f}, loss {probes[layer].loss:.3f}, avg acc {avg_acc:.3f}, "
+                    logger.info(
+                        f"epoch {epoch}, iter {i}, layer {layer}, acc {probes[layer].accuracy:.3f}, loss {probes[layer].loss:.3f}, avg acc {avg_acc:.3f}"
+                    )
                     if wandb_logging:
                         wandb.log(
                             {
@@ -606,9 +622,6 @@ def train_linear_probe_cross_entropy(
                                 f"layer_{layer}_avg_acc": avg_acc,
                             }
                         )
-                logger.info(log_str)
-
-            current_iter += BATCH_SIZE
 
             if current_iter % 1000 == 0:
                 losses = estimate_loss(
@@ -634,6 +647,7 @@ def train_linear_probe_cross_entropy(
                                 f"layer_{layer}_val_acc": losses[layer]["val"]["accuracy"],
                             }
                         )
+            current_iter += BATCH_SIZE
     final_accs = {}
     for layer in probes:
         checkpoint = {
@@ -732,6 +746,13 @@ def set_config_min_max_vals_and_column_name(
     return config
 
 
+def get_one_hot_range(config: Config) -> int:
+    one_hot_range = config.max_val - config.min_val + 1
+    if config.levels_of_interest is not None:
+        one_hot_range = len(config.levels_of_interest)
+    return one_hot_range
+
+
 # %%
 def test_linear_probe_cross_entropy(
     linear_probe_name: str,
@@ -752,9 +773,7 @@ def test_linear_probe_cross_entropy(
         # We raise an error so it doesn't fail silently. If we want to use less games, we can comment the error out
         num_games = (len(probe_data.board_seqs_int) // BATCH_SIZE) * BATCH_SIZE
 
-    one_hot_range = config.max_val - config.min_val + 1
-    if config.levels_of_interest is not None:
-        one_hot_range = len(config.levels_of_interest)
+    one_hot_range = get_one_hot_range(config)
 
     logging_dict["num_games"] = num_games
 
@@ -764,8 +783,6 @@ def test_linear_probe_cross_entropy(
     logger.info(f"custom_indices shape: {probe_data.custom_indices.shape}")
 
     layer = logging_dict["layer"]
-    probes = {layer: SingleProbe(linear_probe, "", None, logging_dict)}
-    layers = list(probes.keys())
 
     current_iter = 0
     loss = 0
@@ -778,7 +795,7 @@ def test_linear_probe_cross_entropy(
             indices = full_test_indices[i : i + BATCH_SIZE]  # shape batch_size
 
             state_stack_one_hot, resid_post_dict = prepare_data_batch(
-                indices, probe_data, config, layers
+                indices, probe_data, config, [layer]
             )
 
             loss, accuracy = linear_probe_forward_pass(
@@ -916,11 +933,10 @@ if __name__ == "__main__":
             config = skill_config
 
         first_layer = 0
-        last_layer = 8
+        last_layer = 7
 
         # When training a probe, you have to set all parameters such as model name, dataset prefix, etc.
         dataset_prefix = "lichess_"
-        # dataset_prefix = "stockfish_"
         split = "train"
         n_layers = 8
         model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
@@ -941,17 +957,14 @@ if __name__ == "__main__":
             DEVICE,
         )
 
-        probes = {}
-        for layer in range(first_layer, last_layer):
-            probes[layer] = SingleProbe(
-                linear_probe=None,
-                probe_name=None,
-                optimiser=None,
-                logging_dict=init_logging_dict(
-                    layer, config, split, dataset_prefix, model_name, n_layers, TRAIN_PARAMS
-                ),
-                loss=0.0,
-                accuracy=0.0,
-            )
+        probes = populate_probes_dict(
+            list(range(first_layer, last_layer + 1)),
+            config,
+            TRAIN_PARAMS,
+            split,
+            dataset_prefix,
+            model_name,
+            n_layers,
+        )
 
         train_linear_probe_cross_entropy(probes, probe_data, config, TRAIN_PARAMS)
