@@ -55,18 +55,15 @@ def test_piece_train_linear_probe_cross_entropy():
         DEVICE,
     )
 
-    probes = {}
-    for layer in range(first_layer, last_layer + 1):
-        probes[layer] = train_test_chess.SingleProbe(
-            linear_probe=None,
-            probe_name=None,
-            optimiser=None,
-            logging_dict=train_test_chess.init_logging_dict(
-                layer, config, split, dataset_prefix, model_name, n_layers, TRAIN_PARAMS
-            ),
-            loss=0.0,
-            accuracy=0.0,
-        )
+    probes = train_test_chess.populate_probes_dict(
+        list(range(first_layer, last_layer + 1)),
+        config,
+        TRAIN_PARAMS,
+        split,
+        dataset_prefix,
+        model_name,
+        n_layers,
+    )
 
     final_accs = train_test_chess.train_linear_probe_cross_entropy(
         probes, probe_data, config, TRAIN_PARAMS
@@ -116,18 +113,15 @@ def test_skill_train_linear_probe_cross_entropy():
         DEVICE,
     )
 
-    probes = {}
-    for layer in range(first_layer, last_layer + 1):
-        probes[layer] = train_test_chess.SingleProbe(
-            linear_probe=None,
-            probe_name=None,
-            optimiser=None,
-            logging_dict=train_test_chess.init_logging_dict(
-                layer, config, split, dataset_prefix, model_name, n_layers, TRAIN_PARAMS
-            ),
-            loss=0.0,
-            accuracy=0.0,
-        )
+    probes = train_test_chess.populate_probes_dict(
+        list(range(first_layer, last_layer + 1)),
+        config,
+        TRAIN_PARAMS,
+        split,
+        dataset_prefix,
+        model_name,
+        n_layers,
+    )
 
     final_accs = train_test_chess.train_linear_probe_cross_entropy(
         probes, probe_data, config, TRAIN_PARAMS

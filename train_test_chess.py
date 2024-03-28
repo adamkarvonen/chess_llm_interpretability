@@ -417,11 +417,11 @@ def populate_probes_dict(
 ) -> dict[int, SingleProbe]:
     probes = {}
     for layer in layers:
-        linear_probe_name = (
-            f"{PROBE_DIR}{logging_dict['model_name']}_{config.linear_probe_name}_layer_{layer}.pth"
-        )
         logging_dict = init_logging_dict(
             layer, config, split, dataset_prefix, model_name, n_layers, TRAIN_PARAMS
+        )
+        linear_probe_name = (
+            f"{PROBE_DIR}{logging_dict['model_name']}_{config.linear_probe_name}_layer_{layer}.pth"
         )
         linear_probe = torch.randn(
             train_params.modes,
@@ -511,8 +511,8 @@ def estimate_loss(
 
     split_indices = {"train": train_indices, "val": val_indices}
     for split in split_indices:
-        losses = {}
-        accuracies = {}
+        losses: dict[int, list[float]] = {}
+        accuracies: dict[int, list[float]] = {}
         for layer in probes:
             losses[layer] = []
             accuracies[layer] = []
