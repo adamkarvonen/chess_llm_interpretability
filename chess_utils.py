@@ -109,6 +109,35 @@ def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> np.
     return state
 
 
+def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
+    """Given a chess board object, return an 8x8 np.ndarray.
+    All squares will be 0 except for the square where the last white move was made.
+    In the 8x8 array, row 0 is A1-H1 (White), row 1 is A2-H2, etc.
+    The purpose of this is to see if the linear probe can determine the next move of the GPT.
+    To get next move instead of last move, we offset the state stack by 1 in linear_probe_forward_pass():
+    resid_post = resid_post[:, :-1, :]
+    state_stack_one_hot = state_stack_one_hot[:, :, 1:, :, :, :]
+    """
+
+    state = np.zeros((8, 8), dtype=int)
+
+    # If there is no last move (such as beginning of game), return the state as is
+    if len(board.move_stack) < 2:
+        return state
+
+    last_last_move = board.move_stack[-2]
+    destination_square = last_last_move.to_square
+    moved_piece = board.piece_at(destination_square)
+    if moved_piece is None:
+        raise ValueError("Piece type is None")
+    piece_value = PIECE_TO_INT[moved_piece.piece_type]
+    if moved_piece.color == chess.BLACK:
+        piece_value *= -1
+    state[destination_square // 8, destination_square % 8] = piece_value
+
+    return state
+
+
 def state_stack_to_chess_board(state: torch.Tensor) -> chess.Board:
     """Given a state stack, return a chess.Board object.
     WARNING: The board will not include any information about whose turn it is, castling rights, en passant, etc.
@@ -198,12 +227,12 @@ def create_state_stacks(
     state_stacks = []
     skill = None
 
-    for idx, board in enumerate(moves_strings):
+    for idx, pgn_string in enumerate(moves_strings):
         if skill_array is not None:
             skill = skill_array[idx]
-        state_stack = torch.tensor(create_state_stack(board, custom_board_to_state_fn, skill)).to(
-            dtype=torch.float32
-        )
+        state_stack = torch.tensor(
+            create_state_stack(pgn_string, custom_board_to_state_fn, skill)
+        ).to(dtype=torch.float32)
         state_stacks.append(state_stack)
 
     # Convert the list of tensors to a single tensor
