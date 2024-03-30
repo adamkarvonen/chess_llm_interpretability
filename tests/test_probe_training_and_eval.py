@@ -20,8 +20,9 @@ TRAIN_PARAMS.num_epochs = 2
 TRAIN_PARAMS.max_train_games = 5000
 TRAIN_PARAMS.max_test_games = 2000
 
+# TRAIN_EPSILON is fairly large because the probes haven't converged and are trained on random permutations of the training data
 TRAIN_EPSILON = 0.03
-TEST_EPSILON = 0.01
+TEST_EPSILON = 0.002
 # IMPORTANT: You must train probes on this model or the asserts will fail
 # https://huggingface.co/adamkarvonen/chess_llms/blob/main/lichess_8layers_ckpt_no_optimizer.pt
 # At a small epsilon and only 10k iters, the probes haven't converged so it will be sensitive to changes in the model
@@ -147,8 +148,8 @@ def test_skill_train_linear_probe_cross_entropy():
 def test_linear_probe_cross_entropy_test():
 
     expected_results = {
-        "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_5.pth": 0.99,
-        "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_skill_probe_layer_7.pth": 0.89,
+        "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_probe_layer_5.pth": 0.9907,
+        "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_skill_probe_layer_7.pth": 0.8856,
     }
 
     print(expected_results)
