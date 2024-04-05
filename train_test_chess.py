@@ -143,6 +143,13 @@ color_config = Config(
     linear_probe_name="chess_color_probe",
 )
 
+threat_config = Config(
+    min_val=0,
+    max_val=1,
+    custom_board_state_function=chess_utils.board_to_threat_state,
+    linear_probe_name="chess_threat_probe",
+)
+
 random_config = Config(
     min_val=-1,
     max_val=1,

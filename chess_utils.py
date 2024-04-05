@@ -38,6 +38,7 @@ PIECE_TO_ONE_HOT_MAPPING = {
     5: 11,
     6: 12,
 }
+BLANK_INDEX = PIECE_TO_ONE_HOT_MAPPING[0]
 ONE_HOT_TO_PIECE_MAPPING = {value: key for key, value in PIECE_TO_ONE_HOT_MAPPING.items()}
 
 
@@ -109,6 +110,20 @@ def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> np.
     return state
 
 
+def board_to_threat_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
+    """Given a chess board object, return an 8x8 np.ndarray.
+    The 8x8 array should tell if each square is being attacked by the opponent."""
+
+    ATTACKING_COLOR = chess.BLACK
+    # Because state is initialized to all 0s, we only need to change the values of the pieces
+    state = np.zeros((8, 8), dtype=int)
+    for i in range(64):
+        if board.is_attacked_by(ATTACKING_COLOR, i):
+            state[i // 8, i % 8] = 1
+
+    return state
+
+
 def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
     """Given a chess board object, return an 8x8 np.ndarray.
     All squares will be 0 except for the square where the last white move was made.
@@ -121,11 +136,13 @@ def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = Non
 
     state = np.zeros((8, 8), dtype=int)
 
+    offset = 2
+
     # If there is no last move (such as beginning of game), return the state as is
-    if len(board.move_stack) < 2:
+    if len(board.move_stack) < offset:
         return state
 
-    last_last_move = board.move_stack[-2]
+    last_last_move = board.move_stack[-offset]
     destination_square = last_last_move.to_square
     moved_piece = board.piece_at(destination_square)
     if moved_piece is None:
