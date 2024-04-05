@@ -28,6 +28,8 @@ USE_PIECE_BOARD_STATE = True
 
 Then run `python train_test_chess.py`.
 
+All experiments in this repo can be done with less than 1 GB of VRAM. Training probes on the 8 layer model takes about 10 minutes on my RTX 3050.
+
 # Interventions
 
 To perform board state interventions, first train a set of 8 (one per layer) board state probes using `train_test_chess.py`. Then run `python board_state_interventions.py`. It will record JSON results in `intervention_logs/`.
