@@ -20,7 +20,7 @@ python model_setup.py
 ```
 
 Then click "Run All" on `lichess_data_filtering.ipynb`.
-To visualise probe outputs, check out `probe_output_visualization.ipynb`.
+To visualise probe outputs or better understand my work, check out `probe_output_visualization.ipynb`. It has commentary and many print statements to walk you through using a single probe and performing a single intervention.
 
 To train a linear probe or test a saved probe on the test set, set these two variables at the bottom of `train_test_chess.py`:
 RUN_TEST_SET = True
