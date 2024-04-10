@@ -655,6 +655,7 @@ def get_one_hot_range(config: Config) -> int:
     return one_hot_range
 
 
+@torch.no_grad()
 def test_linear_probe_cross_entropy(
     linear_probe_name: str,
     probe_data: LinearProbeData,
@@ -688,29 +689,28 @@ def test_linear_probe_cross_entropy(
     current_iter = 0
     accuracy_list = []
     loss_list = []
-    with torch.inference_mode():
-        full_test_indices = torch.arange(0, num_games)
-        for i in tqdm(range(0, num_games, BATCH_SIZE)):
-            indices = full_test_indices[i : i + BATCH_SIZE]  # shape batch_size
+    full_test_indices = torch.arange(0, num_games)
+    for i in tqdm(range(0, num_games, BATCH_SIZE)):
+        indices = full_test_indices[i : i + BATCH_SIZE]  # shape batch_size
 
-            state_stack_one_hot, resid_post_dict = prepare_data_batch(
-                indices, probe_data, config, [layer]
+        state_stack_one_hot, resid_post_dict = prepare_data_batch(
+            indices, probe_data, config, [layer]
+        )
+
+        loss, accuracy = linear_probe_forward_pass(
+            linear_probe, state_stack_one_hot, resid_post_dict[layer], one_hot_range
+        )
+
+        accuracy_list.append(accuracy.item())
+        loss_list.append(loss.item())
+
+        if i % 100 == 0:
+            average_accuracy = sum(accuracy_list) / len(accuracy_list)
+            logger.info(
+                f"batch {i}, average accuracy: {average_accuracy}, acc {accuracy}, loss {loss}"
             )
 
-            loss, accuracy = linear_probe_forward_pass(
-                linear_probe, state_stack_one_hot, resid_post_dict[layer], one_hot_range
-            )
-
-            accuracy_list.append(accuracy.item())
-            loss_list.append(loss.item())
-
-            if i % 100 == 0:
-                average_accuracy = sum(accuracy_list) / len(accuracy_list)
-                logger.info(
-                    f"batch {i}, average accuracy: {average_accuracy}, acc {accuracy}, loss {loss}"
-                )
-
-            current_iter += BATCH_SIZE
+        current_iter += BATCH_SIZE
     data = {
         "accuracy": accuracy_list,
         "loss": loss_list,
