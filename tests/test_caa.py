@@ -51,7 +51,7 @@ def test_caa():
 
     cascade_layers = ""
 
-    activation_name = f"test_only_type=caa_{caa_type}{cascade_layers}_model={n_layers}layers_layer={layer}_activations"
+    activation_name = f"TEST_ONLY_type=caa_{caa_type}{cascade_layers}_model={n_layers}layers_layer={layer}_activations"
 
     logging_dict = train_test_chess.init_logging_dict(
         layer,

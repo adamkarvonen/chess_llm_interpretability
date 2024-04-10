@@ -31,6 +31,7 @@ TEST_EPSILON = 0.002
 
 
 def test_piece_train_linear_probe_cross_entropy():
+    torch.set_grad_enabled(True)
     config = chess_utils.piece_config
     first_layer = 0
     last_layer = 7
@@ -67,6 +68,9 @@ def test_piece_train_linear_probe_cross_entropy():
         n_layers,
     )
 
+    for probe in probes:
+        probes[probe].probe_name = probes[probe].probe_name.replace("tf_lens", "TEST_ONLY_tf_lens")
+
     final_accs = train_test_chess.train_linear_probe_cross_entropy(
         probes, probe_data, config, TRAIN_PARAMS
     )
@@ -89,6 +93,7 @@ def test_piece_train_linear_probe_cross_entropy():
 
 
 def test_skill_train_linear_probe_cross_entropy():
+    torch.set_grad_enabled(True)
     config = chess_utils.skill_config
     first_layer = 0
     last_layer = 7
@@ -124,6 +129,9 @@ def test_skill_train_linear_probe_cross_entropy():
         model_name,
         n_layers,
     )
+
+    for probe in probes:
+        probes[probe].probe_name = probes[probe].probe_name.replace("tf_lens", "TEST_ONLY_tf_lens")
 
     final_accs = train_test_chess.train_linear_probe_cross_entropy(
         probes, probe_data, config, TRAIN_PARAMS

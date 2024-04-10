@@ -33,7 +33,7 @@ def test_single_layer_interventions():
 
     scales = [3.0]
 
-    recording_name = f"n_layers={GPT_LAYER_COUNT}_intervention_type={intervention_type.value}_first_layer={first_layer}_last_layer={last_layer}_p={piece_coe}_b={blank_coe}_scales="
+    recording_name = f"TEST_ONLY_n_layers={GPT_LAYER_COUNT}_intervention_type={intervention_type.value}_first_layer={first_layer}_last_layer={last_layer}_p={piece_coe}_b={blank_coe}_scales="
     for scale in scales:
         recording_name += f"{str(scale).replace('.', '')[:5]}_"
 
