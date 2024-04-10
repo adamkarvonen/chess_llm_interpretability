@@ -1,11 +1,9 @@
-# %%
 from transformer_lens import HookedTransformer, HookedTransformerConfig
 import einops
 import torch
 from tqdm import tqdm
 import numpy as np
 from fancy_einsum import einsum
-import numpy as np
 from dataclasses import dataclass, field
 import pandas as pd
 import pickle
@@ -16,22 +14,15 @@ from jaxtyping import Int, Float, jaxtyped
 from torch import Tensor
 from beartype import beartype
 import collections
-
+from enum import Enum
 import chess_utils
-
-# %%
-# Flags to control logging
-debug_mode = False
-info_mode = True
+import argparse
 
 logger = logging.getLogger(__name__)
 
-if debug_mode:
-    logger.setLevel(logging.DEBUG)
-elif info_mode:
-    logger.setLevel(logging.INFO)
-else:
-    logger.setLevel(logging.WARNING)
+# logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
+# logger.setLevel(logging.WARNING)
 
 # Add handler to this logger if not already present
 if not logger.handlers:
@@ -40,7 +31,6 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-# %%
 MODEL_DIR = "models/"
 DATA_DIR = "data/"
 PROBE_DIR = "linear_probes/"
@@ -55,9 +45,7 @@ DEVICE = (
 )
 logger.info(f"Using device: {DEVICE}")
 
-
 wandb_logging = False
-os.environ["WANDB_MODE"] = "online"
 
 # meta is used to encode the string pgn strings into integer sequences
 with open(f"{MODEL_DIR}meta.pkl", "rb") as f:
@@ -74,10 +62,12 @@ logger.info(encode(meta_round_trip_input))
 logger.info("Performing round trip test on meta")
 assert decode(encode(meta_round_trip_input)) == meta_round_trip_input
 
-# %%
+
+class PlayerColor(Enum):
+    WHITE = "White"
+    BLACK = "Black"
 
 
-# %%
 @dataclass
 class TrainingParams:
     modes: int = 1
@@ -127,6 +117,7 @@ class Config:
     pos_start: int = 0
     # If pos_end is None, it's set to the length of the shortest game in construct_linear_probe_data()
     pos_end: Optional[int] = None
+    player_color: PlayerColor = PlayerColor.WHITE
 
 
 piece_config = Config(
@@ -150,11 +141,36 @@ threat_config = Config(
     linear_probe_name="chess_threat_probe",
 )
 
+legal_move_config = Config(
+    min_val=0,
+    max_val=1,
+    custom_board_state_function=chess_utils.board_to_legal_moves_state,
+    linear_probe_name="chess_legal_move_probe",
+)
+
+prev_move_config = Config(
+    min_val=-6,
+    max_val=6,
+    custom_board_state_function=chess_utils.board_to_prev_state,
+    linear_probe_name="chess_prev_move_probe",
+    pos_start=15,
+    pos_end=16,
+)
+
 random_config = Config(
     min_val=-1,
     max_val=1,
     custom_board_state_function=chess_utils.board_to_random_state,
     linear_probe_name="chess_random_probe",
+)
+
+eval_config = Config(
+    min_val=-1,
+    max_val=1,
+    custom_board_state_function=chess_utils.board_to_eval_state,
+    linear_probe_name="chess_eval_probe",
+    num_rows=1,
+    num_cols=1,
 )
 
 skill_config = Config(
@@ -265,6 +281,7 @@ def init_logging_dict(
         "model_name": model_name,
         "n_layers": n_layers,
         "wandb_run_name": wandb_run_name,
+        "player_color": config.player_color,
     }
 
     return logging_dict
@@ -272,7 +289,6 @@ def init_logging_dict(
 
 def get_board_seqs_string(df: pd.DataFrame) -> list[str]:
     row_length = len(df["transcript"].iloc[0])
-    num_games = len(df)
 
     assert all(
         df["transcript"].apply(lambda x: len(x) == row_length)
@@ -293,9 +309,6 @@ def get_board_seqs_int(df: pd.DataFrame) -> Int[Tensor, "num_games pgn_str_lengt
     board_seqs_int = torch.tensor(encoded_df.apply(list).tolist())
     logger.info(f"board_seqs_int shape: {board_seqs_int.shape}")
     return board_seqs_int
-
-
-# %%
 
 
 @jaxtyped(typechecker=beartype)
@@ -545,7 +558,6 @@ def estimate_loss(
     return out
 
 
-# %%
 def train_linear_probe_cross_entropy(
     probes: dict[int, SingleProbe],
     probe_data: LinearProbeData,
@@ -690,13 +702,6 @@ def construct_linear_probe_data(
     - custom_indices: the indices of the moves we want to probe on. By default, these are the indices of every "."
     - skill_stack: the skill levels of the players in the games (only used if probing for skill)
     """
-    # Checking for foot guns
-
-    if dataset_prefix == "lichess_":
-        assert "stockfish" not in model_name, "Are you sure you're using the right model?"
-
-    if dataset_prefix == "stockfish_":
-        assert "lichess" not in model_name, "Are you sure you're using the right model?"
 
     model = get_transformer_lens_model(model_name, n_layers, device)
     user_state_dict_one_hot_mapping, df = process_dataframe(input_dataframe_file, config)
@@ -760,7 +765,6 @@ def get_one_hot_range(config: Config) -> int:
     return one_hot_range
 
 
-# %%
 def test_linear_probe_cross_entropy(
     linear_probe_name: str,
     probe_data: LinearProbeData,
@@ -840,19 +844,51 @@ def test_linear_probe_cross_entropy(
 def find_config_by_name(config_name: str) -> Config:
     """
     Finds and returns the Config instance with a matching linear_probe_name.
-
-    Args:
-        config_name (str): The name of the config to search for.
-        configs (List[Config]): The list of Config instances to search in.
-
-    Returns:
-        Optional[Config]: The matching Config instance, or None if not found.
     """
     all_configs = [piece_config, color_config, random_config, skill_config]
     for config in all_configs:
         if config.linear_probe_name == config_name:
             return config
     raise ValueError(f"Config with name {config_name} not found")
+
+
+def update_config_using_player_color(player_color: PlayerColor, config: Config) -> Config:
+    """Player color will determine which indexing function we use. In addition, we set player to white by default.
+    If player is black, then we update the probe name as well."""
+
+    if player_color == PlayerColor.WHITE:
+        config.custom_indexing_function = chess_utils.find_dots_indices
+        config.player_color = PlayerColor.WHITE
+
+    if player_color == PlayerColor.BLACK:
+        config.linear_probe_name = config.linear_probe_name.replace("probe", "black_player_probe")
+        config.custom_indexing_function = chess_utils.find_even_spaces_indices
+        config.player_color = PlayerColor.BLACK
+
+    return config
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="Train or test chess probes on piece or skill data."
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["test", "train"],
+        default="train",
+        help='Mode to run the script in: "test" or "train".',
+    )
+    parser.add_argument(
+        "--probe",
+        type=str,
+        choices=["piece", "skill"],
+        default="piece",
+        help='Type of probe to use: "piece" for piece board state or "skill" for player skill level.',
+    )
+
+    args = parser.parse_args()
+    return args
 
 
 RUN_TEST_SET = False  # If True, we will test the probes on the test set. If False, we will train the probes on the train set
@@ -865,7 +901,8 @@ saved_piece_probe_name = "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_piece_
 saved_skill_probe_name = "tf_lens_lichess_8layers_ckpt_no_optimizer_chess_skill_probe_layer_5.pth"
 
 if __name__ == "__main__":
-    if RUN_TEST_SET:
+    args = parse_arguments()
+    if args.mode == "test":
         # saved_probes = [
         #     file
         #     for file in os.listdir(SAVED_PROBE_DIR)
@@ -874,9 +911,9 @@ if __name__ == "__main__":
         saved_probes = []
 
         # Quick and janky way to select between piece and skill probes
-        if USE_PIECE_BOARD_STATE:
+        if args.probe == "piece":
             saved_probes.append(saved_piece_probe_name)
-        else:
+        elif args.probe == "skill":
             saved_probes.append(saved_skill_probe_name)
 
         print(saved_probes)
@@ -931,14 +968,12 @@ if __name__ == "__main__":
                 test_linear_probe_cross_entropy(
                     probe_file_location, probe_data, config, logging_dict, TRAIN_PARAMS
                 )
-    else:
-        # Quick and janky way to select between piece and skill configs
-        config = None
-        if USE_PIECE_BOARD_STATE:
-            config = piece_config
-        else:
+    elif args.mode == "train":
+        config = piece_config
+        if args.probe == "skill":
             config = skill_config
 
+        player_color = PlayerColor.WHITE
         first_layer = 0
         last_layer = 7
 
@@ -952,6 +987,7 @@ if __name__ == "__main__":
         config = set_config_min_max_vals_and_column_name(
             config, input_dataframe_file, dataset_prefix
         )
+        config = update_config_using_player_color(player_color, config)
 
         max_games = TRAIN_PARAMS.max_train_games + TRAIN_PARAMS.max_val_games
         probe_data = construct_linear_probe_data(

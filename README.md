@@ -19,14 +19,22 @@ pip install -r requirements.txt
 python model_setup.py
 ```
 
-Then click "Run All" on `lichess_data_filtering.ipynb`.
+Then click "Run All" on `lichess_data_filtering.ipynb` (I'm filtering data in a notebook instead of a script because I use a series of graphs to illustrate what the data filtering is doing).
 To visualise probe outputs or better understand my work, check out `probe_output_visualization.ipynb`. It has commentary and many print statements to walk you through using a single probe and performing a single intervention.
 
-To train a linear probe or test a saved probe on the test set, set these two variables at the bottom of `train_test_chess.py`:
-RUN_TEST_SET = True
-USE_PIECE_BOARD_STATE = True
+The train_test_chess.py script can be used to either train new linear probes or test a saved probe on the test set.
 
-Then run `python train_test_chess.py`.
+Command line arguments:
+
+--mode: Specifies `train`  or `test`. Optional, defaults to `train`.
+--probe: Determines the type of probe to be used. `piece` probes for the piece type on each square, `skill` probes the skill level of the White player. Optional, defaults to `piece`.
+
+Example: Train piece board state probes:
+`python train_test_chess.py`
+
+Test skill probe:
+`python train_test_chess.py --mode test --probe skill`
+
 
 All experiments in this repo can be done with less than 1 GB of VRAM. Training probes on the 8 layer model takes about 10 minutes on my RTX 3050.
 
