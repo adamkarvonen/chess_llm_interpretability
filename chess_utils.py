@@ -75,6 +75,37 @@ def board_to_skill_state(board: chess.Board, skill: float) -> np.ndarray:
     return state
 
 
+# import chess.engine
+
+# stockfish_path = "/usr/games/stockfish"
+# engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
+
+
+def board_to_eval_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
+    """Given a chess board object, return a 1x1 np.ndarray.
+    The 1x1 array should tell which player is winning.
+    -1 = Black has > 100 centipawns advantage, 0 = Draw, 1 = White has > 100 centipawns advantage.
+    This is horribly inefficient and takes ~0.75 seconds per game. However, I'm just doing exploratory analysis.
+    If we wanted efficiency, we could use a bunch of parallel CPU workers to evaluate the board state and store it
+    in a lookup table. But, then we couldn't cleanly use this with the existing abstractions.
+    To use this function, uncomment the import chess.engine through engine = above, and the internal code below.
+    """
+    state = np.zeros((1, 1), dtype=float)
+
+    # info = engine.analyse(board, chess.engine.Limit(time=0.01))
+    # score = info["score"].white().score(mate_score=10000)
+
+    # # Modify player_one_score based on the score
+    # if score < 100:
+    #     state[0][0] = -1
+    # elif score > 100:
+    #     state[0][0] = 1
+    # else:
+    #     state[0][0] = 0
+
+    return state
+
+
 def board_to_piece_color_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
     """Given a chess board object, return a 8x8 np.ndarray.
     The 8x8 array should tell if each square is black, white, or blank.
@@ -124,6 +155,56 @@ def board_to_threat_state(board: chess.Board, skill: Optional[int] = None) -> np
     return state
 
 
+def board_to_prev_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
+    """Given a chess board object, return an 8x8 np.ndarray.
+    The 8x8 array should tell what piece is on each square at a previous board state."""
+
+    PREVIOUS_TURNS = 25
+    state = np.zeros((8, 8), dtype=int)
+
+    # If we cannot roll back PREVIOUS_TURNS, return a blank state
+    # Predicting blank states is trivial, so be careful and change pos_start to not index into the blank states
+    if len(board.move_stack) < PREVIOUS_TURNS:
+        return state
+
+    new_board = board.copy()
+
+    for _ in range(PREVIOUS_TURNS):
+        new_board.pop()
+
+    for i in range(64):
+        piece = new_board.piece_at(i)
+        if piece:
+            piece_value = PIECE_TO_INT[piece.piece_type]
+            # Multiply by -1 if the piece is black
+            if piece.color == chess.BLACK:
+                piece_value *= -1
+            state[i // 8, i % 8] = piece_value
+
+    return state
+
+
+def board_to_legal_moves_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
+    """Return an 8x8 np.ndarray indicating squares where White has legal moves.
+
+    Each square in the array is 1 if White can legally move a piece to that square, otherwise 0.
+    In the 8x8 array, row 0 corresponds to A1-H1 (from White's perspective), row 1 to A2-H2, etc.
+    """
+    MOVING_COLOR = chess.WHITE
+    # Initialize the state array with all zeros
+    state = np.zeros((8, 8), dtype=int)
+
+    # Iterate through all legal moves for White
+    for move in board.legal_moves:
+        # Check if the move is for a White piece
+        if board.color_at(move.from_square) == MOVING_COLOR:
+            # Update the state array for the destination square of the move
+            to_square = move.to_square
+            state[to_square // 8, to_square % 8] = 1
+
+    return state
+
+
 def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
     """Given a chess board object, return an 8x8 np.ndarray.
     All squares will be 0 except for the square where the last white move was made.
@@ -136,6 +217,8 @@ def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = Non
 
     state = np.zeros((8, 8), dtype=int)
 
+    # If offset is 2, we are predicting the LLM's next move
+    # If offset is 1, we are predicting the opponent's response to the LLM's next move
     offset = 2
 
     # If there is no last move (such as beginning of game), return the state as is
