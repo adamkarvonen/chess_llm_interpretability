@@ -46,8 +46,6 @@ DEVICE = (
 )
 logger.info(f"Using device: {DEVICE}")
 
-wandb_logging = False
-
 # meta is used to encode the string pgn strings into integer sequences
 with open(f"{MODEL_DIR}meta.pkl", "rb") as f:
     meta = pickle.load(f)
@@ -496,7 +494,7 @@ def train_linear_probe_cross_entropy(
 
     one_hot_range = get_one_hot_range(config)
 
-    if wandb_logging:
+    if WANDB_LOGGING:
         import wandb
 
         wandb.init(
@@ -532,7 +530,7 @@ def train_linear_probe_cross_entropy(
                 probes[layer].accuracy_queue.append(probes[layer].accuracy.item())
 
             if i % 100 == 0:
-                if wandb_logging:
+                if WANDB_LOGGING:
                     wandb.log(
                         {
                             "epoch": epoch,
@@ -544,7 +542,7 @@ def train_linear_probe_cross_entropy(
                     logger.info(
                         f"epoch {epoch}, iter {i}, layer {layer}, acc {probes[layer].accuracy:.3f}, loss {probes[layer].loss:.3f}, avg acc {avg_acc:.3f}"
                     )
-                    if wandb_logging:
+                    if WANDB_LOGGING:
                         wandb.log(
                             {
                                 f"layer_{layer}_loss": probes[layer].loss,
@@ -568,7 +566,7 @@ def train_linear_probe_cross_entropy(
                     logger.info(
                         f"epoch {epoch}, layer {layer}, train loss: {losses[layer]['train']['loss']:.3f}, val loss: {losses[layer]['val']['loss']:.3f}, train acc: {losses[layer]['train']['accuracy']:.3f}, val acc: {losses[layer]['val']['accuracy']:.3f}"
                     )
-                    if wandb_logging:
+                    if WANDB_LOGGING:
                         wandb.log(
                             {
                                 f"layer_{layer}_train_loss": losses[layer]["train"]["loss"],
@@ -751,6 +749,11 @@ def parse_arguments():
         default="piece",
         help='Type of probe to use: "piece" for piece board state or "skill" for player skill level.',
     )
+    parser.add_argument(
+        "--wandb_logging",
+        action="store_true",
+        help="Enable logging to Weights & Biases. Default is False.",
+    )
 
     args = parser.parse_args()
     return args
@@ -758,6 +761,7 @@ def parse_arguments():
 
 if __name__ == "__main__":
     args = parse_arguments()
+    WANDB_LOGGING = args.wandb_logging
     if args.mode == "test":
         # saved_probes = [
         #     file

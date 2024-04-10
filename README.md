@@ -39,6 +39,7 @@ Train piece board state probes:
 Test skill probe:
 `python train_test_chess.py --mode test --probe skill`
 
+See all options: `python train_test_chess.py -h`
 
 All experiments in this repo can be done with less than 1 GB of VRAM. Training probes on the 8 layer model takes about 10 minutes on my RTX 3050.
 
