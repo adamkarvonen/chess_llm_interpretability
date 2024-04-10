@@ -2,19 +2,16 @@ from transformer_lens import HookedTransformer, HookedTransformerConfig
 import einops
 import torch
 from tqdm import tqdm
-import numpy as np
 from fancy_einsum import einsum
 from dataclasses import dataclass, field
 import pandas as pd
 import pickle
-import os
 import logging
 from typing import Optional
 from jaxtyping import Int, Float, jaxtyped
 from torch import Tensor
 from beartype import beartype
 import collections
-from enum import Enum
 import chess_utils
 from chess_utils import PlayerColor, Config
 import argparse
@@ -40,6 +37,7 @@ WANDB_PROJECT = "chess_linear_probes"
 BATCH_SIZE = 2
 D_MODEL = 512
 N_HEADS = 8
+WANDB_LOGGING = False
 
 DEVICE = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -235,7 +233,6 @@ def get_custom_indices(
     custom_indexing_function: callable, df: pd.DataFrame
 ) -> Int[Tensor, "num_games num_white_moves"]:
     custom_indices = chess_utils.find_custom_indices(custom_indexing_function, df)
-    custom_indices = torch.tensor(custom_indices).long()
     logger.info(f"custom_indices shape: {custom_indices.shape}")
     return custom_indices
 
@@ -360,7 +357,7 @@ def populate_probes_dict(
             get_one_hot_range(config),
             requires_grad=False,
             device=DEVICE,
-        ) / np.sqrt(D_MODEL)
+        ) / torch.sqrt(torch.tensor(D_MODEL))
         linear_probe.requires_grad = True
         logger.info(f"linear_probe shape: {linear_probe.shape}")
 

@@ -1,8 +1,6 @@
 import torch
-import numpy as np
 from fancy_einsum import einsum
 import chess
-import numpy as np
 from dataclasses import dataclass, field, fields
 import pickle
 import logging
@@ -145,7 +143,7 @@ def prepare_intervention_data(
     num_games: int,
 ) -> tuple[
     dict[int, Float[Tensor, "modes d_model rows cols options"]],
-    Float[Tensor, "modes num_games pgn_str_length rows cols"],
+    Int[Tensor, "modes num_games pgn_str_length rows cols"],
     Int[Tensor, "num_games num_white_moves"],
 ]:
 
@@ -710,7 +708,7 @@ if __name__ == "__main__":
 
     scales_lookup = {
         InterventionType.SINGLE_SCALE: [1.5],
-        InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
+        InterventionType.AVERAGE_TARGET: [9.0],
         InterventionType.SINGLE_TARGET: [-9],
     }
 

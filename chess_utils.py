@@ -1,5 +1,4 @@
 import chess
-import numpy as np
 import pandas as pd
 import torch
 from torch.nn import functional as F
@@ -39,34 +38,22 @@ BLANK_INDEX = PIECE_TO_ONE_HOT_MAPPING[0]
 ONE_HOT_TO_PIECE_MAPPING = {value: key for key, value in PIECE_TO_ONE_HOT_MAPPING.items()}
 
 
-def pretty_print_state_stack(state: np.ndarray) -> None:
-    """Given a state stack, print each state in a readable format.
-    The problem is that chess boards row 0 begin at the bottom, while in state stack (and any array in general),
-    row 0 begins at the top. This is why we reverse the state stack before printing it.
-    """
-    piece_symbols = {1: "W", -1: "B", 0: "."}
-
-    # Print the rows in reverse order
-    for row in reversed(state):
-        print(" ".join(piece_symbols[piece] for piece in row))
-
-
-def board_to_random_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
-    """Given a chess board object, return a 8x8 np.ndarray.
+def board_to_random_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
+    """Given a chess board object, return a 8x8 torch.Tensor.
     Every square should be randomly assigned to 1, -1, or 0.
     This is to sanity check the linear probe.
     In the 8x8 array, row 0 is A1-H1 (White), row 1 is A2-H2, etc."""
-    state = np.zeros((8, 8), dtype=int)
+    state = torch.zeros((8, 8), dtype=torch.int)
     for i in range(64):
-        state[i // 8, i % 8] = np.random.choice([-1, 0, 1])
+        state[i // 8, i % 8] = torch.randint(-1, 2, (1,))
 
     return state
 
 
-def board_to_skill_state(board: chess.Board, skill: float) -> np.ndarray:
-    """Given a chess board object, return a 1x1 np.ndarray.
+def board_to_skill_state(board: chess.Board, skill: float) -> torch.Tensor:
+    """Given a chess board object, return a 1x1 torch.Tensor.
     The 1x1 array should tell what skill level the player is."""
-    state = np.zeros((1, 1), dtype=float)
+    state = torch.zeros((1, 1), dtype=torch.int)
     state[0][0] = skill
 
     return state
@@ -78,8 +65,8 @@ def board_to_skill_state(board: chess.Board, skill: float) -> np.ndarray:
 # engine = chess.engine.SimpleEngine.popen_uci(stockfish_path)
 
 
-def board_to_eval_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
-    """Given a chess board object, return a 1x1 np.ndarray.
+def board_to_eval_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
+    """Given a chess board object, return a 1x1 torch.Tensor.
     The 1x1 array should tell which player is winning.
     -1 = Black has > 100 centipawns advantage, 0 = Draw, 1 = White has > 100 centipawns advantage.
     This is horribly inefficient and takes ~0.75 seconds per game. However, I'm just doing exploratory analysis.
@@ -87,7 +74,7 @@ def board_to_eval_state(board: chess.Board, skill: Optional[int] = None) -> np.n
     in a lookup table. But, then we couldn't cleanly use this with the existing abstractions.
     To use this function, uncomment the import chess.engine through engine = above, and the internal code below.
     """
-    state = np.zeros((1, 1), dtype=float)
+    state = torch.zeros((1, 1), dtype=torch.int)
 
     # info = engine.analyse(board, chess.engine.Limit(time=0.01))
     # score = info["score"].white().score(mate_score=10000)
@@ -103,12 +90,12 @@ def board_to_eval_state(board: chess.Board, skill: Optional[int] = None) -> np.n
     return state
 
 
-def board_to_piece_color_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
-    """Given a chess board object, return a 8x8 np.ndarray.
+def board_to_piece_color_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
+    """Given a chess board object, return a 8x8 torch.Tensor.
     The 8x8 array should tell if each square is black, white, or blank.
     White is 1, black is -1, and blank is 0.
     In the 8x8 array, row 0 is A1-H1 (White), row 1 is A2-H2, etc."""
-    state = np.zeros((8, 8), dtype=int)
+    state = torch.zeros((8, 8), dtype=torch.int)
     for i in range(64):
         piece = board.piece_at(i)
         if piece:
@@ -118,14 +105,14 @@ def board_to_piece_color_state(board: chess.Board, skill: Optional[int] = None) 
     return state
 
 
-def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
-    """Given a chess board object, return an 8x8 np.ndarray.
+def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
+    """Given a chess board object, return an 8x8 torch.Tensor.
     The 8x8 array should tell what piece is on each square. A white pawn could be 1, a black pawn could be -1, etc.
     Blank squares should be 0.
     In the 8x8 array, row 0 is A1-H1 (White), row 1 is A2-H2, etc."""
 
     # Because state is initialized to all 0s, we only need to change the values of the pieces
-    state = np.zeros((8, 8), dtype=int)
+    state = torch.zeros((8, 8), dtype=torch.int)
     for i in range(64):
         piece = board.piece_at(i)
         if piece:
@@ -138,13 +125,13 @@ def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> np.
     return state
 
 
-def board_to_threat_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
-    """Given a chess board object, return an 8x8 np.ndarray.
+def board_to_threat_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
+    """Given a chess board object, return an 8x8 torch.Tensor.
     The 8x8 array should tell if each square is being attacked by the opponent."""
 
     ATTACKING_COLOR = chess.BLACK
     # Because state is initialized to all 0s, we only need to change the values of the pieces
-    state = np.zeros((8, 8), dtype=int)
+    state = torch.zeros((8, 8), dtype=torch.int)
     for i in range(64):
         if board.is_attacked_by(ATTACKING_COLOR, i):
             state[i // 8, i % 8] = 1
@@ -152,12 +139,12 @@ def board_to_threat_state(board: chess.Board, skill: Optional[int] = None) -> np
     return state
 
 
-def board_to_prev_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
-    """Given a chess board object, return an 8x8 np.ndarray.
+def board_to_prev_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
+    """Given a chess board object, return an 8x8 torch.Tensor.
     The 8x8 array should tell what piece is on each square at a previous board state."""
 
     PREVIOUS_TURNS = 25
-    state = np.zeros((8, 8), dtype=int)
+    state = torch.zeros((8, 8), dtype=torch.int)
 
     # If we cannot roll back PREVIOUS_TURNS, return a blank state
     # Predicting blank states is trivial, so be careful and change pos_start to not index into the blank states
@@ -181,15 +168,15 @@ def board_to_prev_state(board: chess.Board, skill: Optional[int] = None) -> np.n
     return state
 
 
-def board_to_legal_moves_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
-    """Return an 8x8 np.ndarray indicating squares where White has legal moves.
+def board_to_legal_moves_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
+    """Return an 8x8 torch.Tensor indicating squares where White has legal moves.
 
     Each square in the array is 1 if White can legally move a piece to that square, otherwise 0.
     In the 8x8 array, row 0 corresponds to A1-H1 (from White's perspective), row 1 to A2-H2, etc.
     """
     MOVING_COLOR = chess.WHITE
     # Initialize the state array with all zeros
-    state = np.zeros((8, 8), dtype=int)
+    state = torch.zeros((8, 8), dtype=torch.int)
 
     # Iterate through all legal moves for White
     for move in board.legal_moves:
@@ -202,8 +189,8 @@ def board_to_legal_moves_state(board: chess.Board, skill: Optional[int] = None) 
     return state
 
 
-def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = None) -> np.ndarray:
-    """Given a chess board object, return an 8x8 np.ndarray.
+def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
+    """Given a chess board object, return an 8x8 torch.Tensor.
     All squares will be 0 except for the square where the last white move was made.
     In the 8x8 array, row 0 is A1-H1 (White), row 1 is A2-H2, etc.
     The purpose of this is to see if the linear probe can determine the next move of the GPT.
@@ -212,7 +199,7 @@ def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = Non
     state_stack_one_hot = state_stack_one_hot[:, :, 1:, :, :, :]
     """
 
-    state = np.zeros((8, 8), dtype=int)
+    state = torch.zeros((8, 8), dtype=torch.int)
 
     # If offset is 2, we are predicting the LLM's next move
     # If offset is 1, we are predicting the opponent's response to the LLM's next move
@@ -263,13 +250,12 @@ def pgn_string_to_board(pgn_string: str) -> chess.Board:
     return board
 
 
-# TODO: I should have kept everything in torch.Tensor format. Would be nice to fix at some point.
 def create_state_stack(
     moves_string: str,
-    custom_board_to_state_fn: Callable[[chess.Board], np.ndarray],
-    skill: Optional[float] = None,
-) -> np.ndarray:
-    """Given a string of PGN format moves, create an 8x8 np.ndarray for every character in the string."""
+    custom_board_to_state_fn: Callable[[chess.Board], torch.Tensor],
+    skill: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Given a string of PGN format moves, create an 8x8 torch.Tensor for every character in the string."""
 
     board = chess.Board()
     initial_states = []
@@ -309,17 +295,16 @@ def create_state_stack(
 
     # expanded_states.append(initial_states[-1]) # The last element in expanded_states is the final position of the board.
     # Currently not using this as len(expanded_states) would be 1 greater than len(moves_string) and that would be confusing.
-    return np.array(expanded_states)
+    return torch.stack(expanded_states)
 
 
-# TODO: Investigate if we need dtype=torch.float32, as state_stacks should only contain integers.
 def create_state_stacks(
     moves_strings: list[str],
-    custom_board_to_state_fn: Callable[[chess.Board], np.ndarray],
-    skill_array: Optional[np.ndarray] = None,
+    custom_board_to_state_fn: Callable[[chess.Board], torch.Tensor],
+    skill_array: Optional[torch.Tensor] = None,
 ) -> Float[Tensor, "modes sample_size pgn_str_length rows cols"]:
     """Given a list of strings of PGN format moves, create a tensor of shape (len(moves_strings), 8, 8).
-    custom_board_to_state is a function that takes a chess.Board object and returns a 8x8 np.ndarray for
+    custom_board_to_state is a function that takes a chess.Board object and returns a 8x8 torch.Tensor for
     board state, or 1x1 for centipawn advantage."""
     state_stacks = []
     skill = None
@@ -327,9 +312,8 @@ def create_state_stacks(
     for idx, pgn_string in enumerate(moves_strings):
         if skill_array is not None:
             skill = skill_array[idx]
-        state_stack = torch.tensor(
-            create_state_stack(pgn_string, custom_board_to_state_fn, skill)
-        ).to(dtype=torch.float32)
+        state_stack = create_state_stack(pgn_string, custom_board_to_state_fn, skill)
+
         state_stacks.append(state_stack)
 
     # Convert the list of tensors to a single tensor
@@ -346,7 +330,7 @@ def state_stack_to_one_hot(
     min_val: int,
     max_val: int,
     device: torch.device,
-    state_stack: np.ndarray,
+    state_stack: torch.Tensor,
     user_mapping: Optional[dict[int, int]] = None,
 ) -> Int[Tensor, "modes sample_size num_white_moves rows cols one_hot_range"]:
     """Input shape: assert(state_stacks_all_chars.shape) == (modes, sample_size, game_length, rows, cols)
@@ -382,14 +366,12 @@ def state_stack_to_one_hot(
     return one_hot
 
 
-def one_hot_to_state_stack(one_hot: torch.Tensor, min_val: int) -> np.ndarray:
+def one_hot_to_state_stack(one_hot: torch.Tensor, min_val: int) -> torch.Tensor:
     """Input shape: assert(probe_out.shape) == (modes, sample_size, num_white_moves, rows, cols, one_hot_range)
     Output shape: assert(state_stacks_probe_outputs.shape) == (modes, sample_size, num_white_moves, rows, cols)
     """
-    if one_hot.is_cuda:
-        one_hot = one_hot.cpu()
     indices = torch.argmax(one_hot, dim=-1)
-    state_stack = indices.numpy() + min_val
+    state_stack = indices + min_val
     return state_stack
 
 
@@ -472,7 +454,7 @@ def find_odd_indices_offset_one(moves_string: str) -> list[int]:
 
 def find_custom_indices(
     custom_indexing_fn: Callable[[str], list[int]], df: pd.DataFrame
-) -> np.ndarray:
+) -> torch.Tensor:
     indices_series = df["transcript"].apply(custom_indexing_fn)
     shortest_length = indices_series.apply(len).min()
     print("Shortest length:", shortest_length)
@@ -482,7 +464,7 @@ def find_custom_indices(
         len(lst) == shortest_length for lst in indices_series
     ), "Not all lists have the same length"
 
-    indices = np.array(indices_series.apply(list).tolist())
+    indices = torch.tensor(indices_series.apply(list).tolist(), dtype=torch.int)
     return indices
 
 
