@@ -373,7 +373,7 @@ def state_stack_to_one_hot(
         num_cols,
         range_size,
         device=device,
-        dtype=int,
+        dtype=torch.int,
     )
 
     for val in mapping:
