@@ -138,7 +138,6 @@ def get_probe_data(probe_name: str, num_games: int) -> train_test_chess.LinearPr
 
         probe_data = train_test_chess.construct_linear_probe_data(
             input_dataframe_file,
-            layer,
             dataset_prefix,
             n_layers,
             model_name,
