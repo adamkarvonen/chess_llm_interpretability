@@ -7,20 +7,15 @@ from transformer_lens import HookedTransformer
 from functools import partial
 
 import train_test_chess
-from train_test_chess import Config, LinearProbeData
+from train_test_chess import LinearProbeData
+import chess_utils
+from chess_utils import Config
 
 torch.set_grad_enabled(False)
 
-# Flags to control logging
-debug_mode = False
-info_mode = True
-
-if debug_mode:
-    log_level = logging.DEBUG
-elif info_mode:
-    log_level = logging.INFO
-else:
-    log_level = logging.WARNING
+# log_level = logging.DEBUG
+log_level = logging.INFO
+# log_level = logging.WARNING
 
 # Configure logging
 logging.basicConfig(level=log_level)
@@ -172,7 +167,7 @@ device = (
 )
 logger.info(f"Using device: {device}")
 
-config = train_test_chess.skill_config
+config = chess_utils.skill_config
 
 # Sweep over layers, levels of interest, pos_start, and dataset_prefix
 
@@ -202,14 +197,13 @@ for (
     model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
     config.levels_of_interest = level
     input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-    config = train_test_chess.set_config_min_max_vals_and_column_name(
+    config = chess_utils.set_config_min_max_vals_and_column_name(
         config, input_dataframe_file, dataset_prefix
     )
     config.pos_start = pos_start
 
     probe_data = train_test_chess.construct_linear_probe_data(
         input_dataframe_file,
-        layer,
         dataset_prefix,
         n_layers,
         model_name,
@@ -225,7 +219,13 @@ for (
     )
 
     logging_dict = train_test_chess.init_logging_dict(
-        config, probe_data, split, dataset_prefix, model_name, n_layers
+        layer,
+        config,
+        split,
+        dataset_prefix,
+        model_name,
+        n_layers,
+        train_test_chess.TRAIN_PARAMS,
     )
 
     if caa_type == "cascade":

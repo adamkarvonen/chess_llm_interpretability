@@ -7,6 +7,7 @@ sys.path.append(parent_dir)
 
 import train_test_chess
 import torch
+import chess_utils
 
 DATA_DIR = "data/"
 
@@ -30,7 +31,7 @@ TEST_EPSILON = 0.002
 
 
 def test_piece_train_linear_probe_cross_entropy():
-    config = train_test_chess.piece_config
+    config = chess_utils.piece_config
     first_layer = 0
     last_layer = 7
 
@@ -40,7 +41,7 @@ def test_piece_train_linear_probe_cross_entropy():
     model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
 
     input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-    config = train_test_chess.set_config_min_max_vals_and_column_name(
+    config = chess_utils.set_config_min_max_vals_and_column_name(
         config, input_dataframe_file, dataset_prefix
     )
 
@@ -88,7 +89,7 @@ def test_piece_train_linear_probe_cross_entropy():
 
 
 def test_skill_train_linear_probe_cross_entropy():
-    config = train_test_chess.skill_config
+    config = chess_utils.skill_config
     first_layer = 0
     last_layer = 7
 
@@ -98,7 +99,7 @@ def test_skill_train_linear_probe_cross_entropy():
     model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
 
     input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-    config = train_test_chess.set_config_min_max_vals_and_column_name(
+    config = chess_utils.set_config_min_max_vals_and_column_name(
         config, input_dataframe_file, dataset_prefix
     )
 
@@ -163,7 +164,7 @@ def test_linear_probe_cross_entropy_test():
                 if key != "linear_probe":
                     print(key, state_dict[key])
 
-            config = train_test_chess.find_config_by_name(state_dict["config_name"])
+            config = chess_utils.find_config_by_name(state_dict["config_name"])
             layer = state_dict["layer"]
             model_name = state_dict["model_name"]
             dataset_prefix = state_dict["dataset_prefix"]
@@ -176,7 +177,7 @@ def test_linear_probe_cross_entropy_test():
             split = "test"
 
             input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-            config = train_test_chess.set_config_min_max_vals_and_column_name(
+            config = chess_utils.set_config_min_max_vals_and_column_name(
                 config, input_dataframe_file, dataset_prefix
             )
 

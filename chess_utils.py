@@ -1,16 +1,13 @@
 import chess
 import numpy as np
 import pandas as pd
-import pickle
 import torch
 from torch.nn import functional as F
 from typing import Callable, Optional
-
+from dataclasses import dataclass
 from jaxtyping import Int, Float, jaxtyped
 from torch import Tensor
-import jaxtyping
-from beartype import beartype
-
+from enum import Enum
 
 # Mapping of chess pieces to integers
 PIECE_TO_INT = {
@@ -551,3 +548,139 @@ def get_model_move(
     model_response = idx[:, input_length:]
     model_move = decode_list(meta, model_response[0].tolist())
     return model_move
+
+
+class PlayerColor(Enum):
+    WHITE = "White"
+    BLACK = "Black"
+
+
+@dataclass
+class Config:
+    min_val: int
+    max_val: int
+    custom_board_state_function: callable
+    linear_probe_name: str
+    custom_indexing_function: callable = find_dots_indices
+    num_rows: int = 8
+    num_cols: int = 8
+    levels_of_interest: Optional[list[int]] = None
+    column_name: str = None
+    probing_for_skill: bool = False
+    # pos_start indexes into custom_indexing_function. Example: if pos_start = 25, for find_dots_indices, selects everything after the first 25 moves
+    pos_start: int = 0
+    # If pos_end is None, it's set to the length of the shortest game in construct_linear_probe_data()
+    pos_end: Optional[int] = None
+    player_color: PlayerColor = PlayerColor.WHITE
+
+
+piece_config = Config(
+    min_val=-6,
+    max_val=6,
+    custom_board_state_function=board_to_piece_state,
+    linear_probe_name="chess_piece_probe",
+)
+
+color_config = Config(
+    min_val=-1,
+    max_val=1,
+    custom_board_state_function=board_to_piece_color_state,
+    linear_probe_name="chess_color_probe",
+)
+
+threat_config = Config(
+    min_val=0,
+    max_val=1,
+    custom_board_state_function=board_to_threat_state,
+    linear_probe_name="chess_threat_probe",
+)
+
+legal_move_config = Config(
+    min_val=0,
+    max_val=1,
+    custom_board_state_function=board_to_legal_moves_state,
+    linear_probe_name="chess_legal_move_probe",
+)
+
+prev_move_config = Config(
+    min_val=-6,
+    max_val=6,
+    custom_board_state_function=board_to_prev_state,
+    linear_probe_name="chess_prev_move_probe",
+    pos_start=15,
+    pos_end=16,
+)
+
+random_config = Config(
+    min_val=-1,
+    max_val=1,
+    custom_board_state_function=board_to_random_state,
+    linear_probe_name="chess_random_probe",
+)
+
+eval_config = Config(
+    min_val=-1,
+    max_val=1,
+    custom_board_state_function=board_to_eval_state,
+    linear_probe_name="chess_eval_probe",
+    num_rows=1,
+    num_cols=1,
+)
+
+skill_config = Config(
+    min_val=-2,
+    max_val=20,
+    custom_board_state_function=board_to_skill_state,
+    linear_probe_name="chess_skill_probe",
+    num_rows=1,
+    num_cols=1,
+    levels_of_interest=[0, 5],
+    probing_for_skill=True,
+    pos_start=25,
+)
+
+
+def find_config_by_name(config_name: str) -> Config:
+    """
+    Finds and returns the Config instance with a matching linear_probe_name.
+    """
+    all_configs = [piece_config, color_config, random_config, skill_config]
+    for config in all_configs:
+        if config.linear_probe_name == config_name:
+            return config
+    raise ValueError(f"Config with name {config_name} not found")
+
+
+def update_config_using_player_color(player_color: PlayerColor, config: Config) -> Config:
+    """Player color will determine which indexing function we use. In addition, we set player to white by default.
+    If player is black, then we update the probe name as well."""
+
+    if player_color == PlayerColor.WHITE:
+        config.custom_indexing_function = find_dots_indices
+        config.player_color = PlayerColor.WHITE
+
+    if player_color == PlayerColor.BLACK:
+        config.linear_probe_name = config.linear_probe_name.replace("probe", "black_player_probe")
+        config.custom_indexing_function = find_even_spaces_indices
+        config.player_color = PlayerColor.BLACK
+
+    return config
+
+
+def set_config_min_max_vals_and_column_name(
+    config: Config,
+    input_dataframe_file: str,
+    dataset_prefix: str,
+) -> Config:
+    if config.levels_of_interest is not None or config.probing_for_skill:
+        if dataset_prefix == "stockfish_":
+            config.column_name = "player_two"
+        elif "lichess_" in dataset_prefix:
+            config.column_name = "WhiteEloBinIndex"
+    else:
+        return config
+    df = pd.read_csv(input_dataframe_file)
+    config.min_val = df[config.column_name].min()
+    config.max_val = df[config.column_name].max()
+
+    return config

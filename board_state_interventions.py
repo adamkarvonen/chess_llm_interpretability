@@ -119,7 +119,7 @@ def get_probe_data(probe_name: str, num_games: int) -> train_test_chess.LinearPr
             if key != "linear_probe":
                 print(key, state_dict[key])
 
-        config = train_test_chess.find_config_by_name(state_dict["config_name"])
+        config = chess_utils.find_config_by_name(state_dict["config_name"])
         layer = state_dict["layer"]
         model_name = state_dict["model_name"]
         dataset_prefix = state_dict["dataset_prefix"]
@@ -132,7 +132,7 @@ def get_probe_data(probe_name: str, num_games: int) -> train_test_chess.LinearPr
 
         split = SPLIT
         input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-        config = train_test_chess.set_config_min_max_vals_and_column_name(
+        config = chess_utils.set_config_min_max_vals_and_column_name(
             config, input_dataframe_file, dataset_prefix
         )
 
@@ -168,7 +168,7 @@ def prepare_intervention_data(
         linear_probe = checkpoint["linear_probe"]
         probes[layer] = linear_probe
 
-    config = train_test_chess.find_config_by_name(checkpoint["config_name"])
+    config = chess_utils.find_config_by_name(checkpoint["config_name"])
     state_stacks_all_chars = chess_utils.create_state_stacks(
         probe_data.board_seqs_string[:num_games], config.custom_board_state_function
     )
