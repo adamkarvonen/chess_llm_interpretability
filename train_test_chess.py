@@ -96,10 +96,10 @@ class SingleProbe:
 @dataclass
 class LinearProbeData:
     model: HookedTransformer
-    custom_indices: torch.tensor
-    board_seqs_int: torch.tensor
+    custom_indices: torch.Tensor
+    board_seqs_int: torch.Tensor
     board_seqs_string: list[str]
-    skill_stack: torch.tensor
+    skill_stack: torch.Tensor
     user_state_dict_one_hot_mapping: Optional[dict[int, int]] = None
 
 
@@ -427,7 +427,10 @@ def estimate_loss(
     out = {}
 
     for layer in probes:
-        out[layer] = {"train": {"loss": 0, "accuracy": 0}, "val": {"loss": 0, "accuracy": 0}}
+        out[layer] = {
+            "train": {"loss": 0.0, "accuracy": 0.0},
+            "val": {"loss": 0.0, "accuracy": 0.0},
+        }
 
     eval_iters = (train_params.eval_iters // BATCH_SIZE) * BATCH_SIZE
 
@@ -683,8 +686,6 @@ def test_linear_probe_cross_entropy(
     layer = logging_dict["layer"]
 
     current_iter = 0
-    loss = 0
-    accuracy = 0
     accuracy_list = []
     loss_list = []
     with torch.inference_mode():
