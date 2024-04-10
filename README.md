@@ -22,14 +22,18 @@ python model_setup.py
 Then click "Run All" on `lichess_data_filtering.ipynb` (I'm filtering data in a notebook instead of a script because I use a series of graphs to illustrate what the data filtering is doing).
 To visualise probe outputs or better understand my work, check out `probe_output_visualization.ipynb`. It has commentary and many print statements to walk you through using a single probe and performing a single intervention.
 
-The train_test_chess.py script can be used to either train new linear probes or test a saved probe on the test set.
+The `train_test_chess.py` script can be used to either train new linear probes or test a saved probe on the test set.
 
 Command line arguments:
 
 --mode: Specifies `train`  or `test`. Optional, defaults to `train`.
+
 --probe: Determines the type of probe to be used. `piece` probes for the piece type on each square, `skill` probes the skill level of the White player. Optional, defaults to `piece`.
 
-Example: Train piece board state probes:
+
+Examples:
+
+Train piece board state probes:
 `python train_test_chess.py`
 
 Test skill probe:
