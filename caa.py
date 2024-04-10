@@ -67,10 +67,15 @@ def create_contrastive_activations(
     probe_data: LinearProbeData,
     config: Config,
     logging_dict: dict,
+    layer: int,
+    max_games: int,
 ) -> torch.Tensor:
+    """Creates a contrastive activation for a given layer and saves it to disk.
+    We could do this for all layers at once for simple CAA, but it breaks the abstraction I was using for cascading CAA.
+    """
     assert logging_dict["split"] == "train", "Don't train on the test set"
 
-    num_games = (MAXIMUM_TRAINING_GAMES // BATCH_SIZE) * BATCH_SIZE
+    num_games = (max_games // BATCH_SIZE) * BATCH_SIZE
 
     if num_games < len(probe_data.board_seqs_int):
         raise ValueError(
@@ -167,72 +172,72 @@ device = (
 )
 logger.info(f"Using device: {device}")
 
-config = chess_utils.skill_config
 
-# Sweep over layers, levels of interest, pos_start, and dataset_prefix
+if __name__ == "__main__":
+    config = chess_utils.skill_config
+    # Sweep over layers, levels of interest, pos_start, and dataset_prefix
+    layers = range(5, 7, 1)
+    levels_of_interest = [[0, 5]]
+    pos_starts = [25]
 
-layers = range(10, 15, 1)
-levels_of_interest = [[0, 5]]
-pos_starts = [25]
+    caa_type = "simple"
+    # caa_type = "cascade"
 
-caa_type = "simple"
-# caa_type = "cascade"
-
-cascade_layers = ""
-
-if caa_type == "cascade":
-    cascade_layers += "".join([f"{layer}_" for layer in layers])
-
-previous_layer_activations = {}
-
-for (
-    layer,
-    level,
-    pos_start,
-) in itertools.product(layers, levels_of_interest, pos_starts):
-    dataset_prefix = "lichess_"
-    layer = layer
-    split = "train"
-    n_layers = 16
-    model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
-    config.levels_of_interest = level
-    input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
-    config = chess_utils.set_config_min_max_vals_and_column_name(
-        config, input_dataframe_file, dataset_prefix
-    )
-    config.pos_start = pos_start
-
-    probe_data = train_test_chess.construct_linear_probe_data(
-        input_dataframe_file,
-        dataset_prefix,
-        n_layers,
-        model_name,
-        config,
-        MAXIMUM_TRAINING_GAMES,
-        device,
-    )
-
-    levels_str = "".join([str(i) for i in level])
-
-    activation_name = (
-        f"type=caa_{caa_type}{cascade_layers}_model={n_layers}layers_layer={layer}_activations"
-    )
-
-    logging_dict = train_test_chess.init_logging_dict(
-        layer,
-        config,
-        split,
-        dataset_prefix,
-        model_name,
-        n_layers,
-        train_test_chess.TRAIN_PARAMS,
-    )
+    cascade_layers = ""
 
     if caa_type == "cascade":
-        probe_data.model = add_hook_interventions(
-            probe_data.model, previous_layer_activations, scale=0.15
+        cascade_layers += "".join([f"{layer}_" for layer in layers])
+
+    previous_layer_activations = {}
+
+    for (
+        layer,
+        level,
+        pos_start,
+    ) in itertools.product(layers, levels_of_interest, pos_starts):
+        dataset_prefix = "lichess_"
+        layer = layer
+        split = "train"
+        n_layers = 8
+        model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
+        config.levels_of_interest = level
+        input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
+        config = chess_utils.set_config_min_max_vals_and_column_name(
+            config, input_dataframe_file, dataset_prefix
+        )
+        config.pos_start = pos_start
+
+        probe_data = train_test_chess.construct_linear_probe_data(
+            input_dataframe_file,
+            dataset_prefix,
+            n_layers,
+            model_name,
+            config,
+            MAXIMUM_TRAINING_GAMES,
+            device,
         )
 
-    previous_layer_activations[layer] = create_contrastive_activations(
-        activation_name, probe_data, config, logging_dict
-    )
+        levels_str = "".join([str(i) for i in level])
+
+        activation_name = (
+            f"type=caa_{caa_type}{cascade_layers}_model={n_layers}layers_layer={layer}_activations"
+        )
+
+        logging_dict = train_test_chess.init_logging_dict(
+            layer,
+            config,
+            split,
+            dataset_prefix,
+            model_name,
+            n_layers,
+            train_test_chess.TRAIN_PARAMS,
+        )
+
+        if caa_type == "cascade":
+            probe_data.model = add_hook_interventions(
+                probe_data.model, previous_layer_activations, scale=0.15
+            )
+
+        previous_layer_activations[layer] = create_contrastive_activations(
+            activation_name, probe_data, config, logging_dict, layer, MAXIMUM_TRAINING_GAMES
+        )
