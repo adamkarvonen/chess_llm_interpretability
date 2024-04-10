@@ -39,12 +39,8 @@ logging.basicConfig(level=log_level)
 logger = logging.getLogger(__name__)
 
 GPT_LAYER_COUNT = 8
-MODEL_DIR = "models/"
 DATA_DIR = "data/"
-PROBE_DIR = "linear_probes/"
-MODEL_PREFIX = "lichess_"
-# MODEL_PREFIX = ""
-SAVED_PROBE_DIR = f"linear_probes/"
+SAVED_PROBE_DIR = f"linear_probes/saved_probes/"
 RECORDING_DIR = "intervention_logs/"
 SPLIT = "test"
 MODES = 1  # Currently only supporting 1 mode so this is fairly unnecessary
@@ -73,12 +69,6 @@ class InterventionType(Enum):
 class ModelType(Enum):
     ORIGINAL = "original"
     MODIFIED = "modified"
-
-
-class SamplingType(Enum):
-    DETERMINISTIC_ONLY = "deterministic_only"
-    # BOTH means determinstic sampling and probabilistic temperature based sampling
-    BOTH = "both"
 
 
 @dataclass
@@ -467,13 +457,12 @@ def perform_board_interventions(
     probe_data: train_test_chess.LinearProbeData,
     num_games: int,
     intervention_type: InterventionType,
-    sampling_type: SamplingType,
     recording_name: str,
     piece_coefficient: float = 1.0,
     blank_coefficient: float = 1.0,
     track_outputs: bool = False,
     scales: list[float] = [0.1],
-):
+) -> float:
     probes, state_stacks_all_chars, white_move_indices = prepare_intervention_data(
         probe_names, probe_data, num_games
     )
@@ -623,7 +612,7 @@ def perform_board_interventions(
                         # scale = min(0.3, scale)
                         # print(target, scale)
 
-                    resid[0, -1] -= scale * flip_dir
+                    resid[:, -1] -= scale * flip_dir
 
                     # For experimentation with dynamic scale setting
                     # coeff = resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
@@ -712,58 +701,57 @@ def perform_board_interventions(
         records = create_recording_data(move_counters, scale_tracker)
         file.write(json.dumps(records))
 
-
-scales_lookup = {
-    InterventionType.SINGLE_SCALE: [1.5],
-    # InterventionType.SINGLE_SCALE: [0.01, 0.1, 0.3, 0.5, 0.7, 1.0, 1.2, 1.5, 2.0, 3.0, 4.0],
-    InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
-    # InterventionType.SINGLE_TARGET: [-9, -10],
-    InterventionType.SINGLE_TARGET: [-9],
-}
-
-intervention_types = [
-    InterventionType.SINGLE_SCALE,
-    # InterventionType.AVERAGE_TARGET,
-    # InterventionType.SINGLE_TARGET,
-]
-
-sampling_type = SamplingType.BOTH
-
-num_games = 200
-
-for intervention_type in intervention_types:
-
-    probe_names = {}
-    first_layer = 3
-    last_layer = 6
-
-    for i in range(first_layer, last_layer + 1, 1):
-        probe_names[i] = (
-            f"tf_lens_lichess_{GPT_LAYER_COUNT}layers_ckpt_no_optimizer_chess_piece_probe_layer_{i}.pth"
-        )
-    probe_data = get_probe_data(probe_names[first_layer], num_games)
-
-    piece_coe = 1.0
-    blank_coe = 0.0
-
-    scales = scales_lookup[intervention_type]
-
-    recording_name = f"sampling={sampling_type.value}_n_layers={GPT_LAYER_COUNT}_intervention_type={intervention_type.value}_first_layer={first_layer}_last_layer={last_layer}_p={piece_coe}_b={blank_coe}_scales="
-    for scale in scales:
-        recording_name += f"{str(scale).replace('.', '')[:5]}_"
-
-    print(f"Recording name: {recording_name}")
-
-    perform_board_interventions(
-        probe_names,
-        probe_data,
-        num_games,
-        intervention_type,
-        sampling_type,
-        recording_name,
-        track_outputs=False,
-        scales=scales,
+    return (
+        move_counters.mod_model_tracker.mod_board_argmax_legal_total / move_counters.possible_moves
     )
+
+
+if __name__ == "__main__":
+
+    scales_lookup = {
+        InterventionType.SINGLE_SCALE: [1.5],
+        InterventionType.AVERAGE_TARGET: np.arange(0.0, -12.1, -3.0),
+        InterventionType.SINGLE_TARGET: [-9],
+    }
+
+    intervention_types = [
+        InterventionType.SINGLE_SCALE,
+    ]
+
+    num_games = 200
+
+    for intervention_type in intervention_types:
+
+        probe_names = {}
+        first_layer = 5
+        last_layer = 5
+
+        for i in range(first_layer, last_layer + 1, 1):
+            probe_names[i] = (
+                f"tf_lens_lichess_{GPT_LAYER_COUNT}layers_ckpt_no_optimizer_chess_piece_probe_layer_{i}.pth"
+            )
+        probe_data = get_probe_data(probe_names[first_layer], num_games)
+
+        piece_coe = 1.0
+        blank_coe = 0.0
+
+        scales = scales_lookup[intervention_type]
+
+        recording_name = f"n_layers={GPT_LAYER_COUNT}_intervention_type={intervention_type.value}_first_layer={first_layer}_last_layer={last_layer}_p={piece_coe}_b={blank_coe}_scales="
+        for scale in scales:
+            recording_name += f"{str(scale).replace('.', '')[:5]}_"
+
+        print(f"Recording name: {recording_name}")
+
+        perform_board_interventions(
+            probe_names,
+            probe_data,
+            num_games,
+            intervention_type,
+            recording_name,
+            track_outputs=False,
+            scales=scales,
+        )
 
 # For profiling, most cumulative time appears to be in forward pass in chess_utils.get_model_move()
 # def run_profile():
@@ -775,7 +763,6 @@ for intervention_type in intervention_types:
 #         probe_data,
 #         1,
 #         intervention_type,
-#         sampling_type,
 #         recording_name,
 #         track_outputs=False,
 #         scales=scales,

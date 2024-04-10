@@ -45,7 +45,7 @@ All experiments in this repo can be done with less than 1 GB of VRAM. Training p
 
 # Interventions
 
-To perform board state interventions, first train a set of 8 (one per layer) board state probes using `train_test_chess.py`. Then run `python board_state_interventions.py`. It will record JSON results in `intervention_logs/`.
+To perform board state interventions on one layer, run `python board_state_interventions.py`. It will record JSON results in `intervention_logs/`. To get better results, train a set of 8 (one per layer) board state probes using `train_test_chess.py`.
 
 To perform skill interventions, you can train a set of 8 skill probes using `train_test_chess.py` or generate a set of 8 contrastive activations using `caa.py`. Note that contrastive activations tend to work a little better. If you want to use probe derived interventions, use this script to create activation files from the probes: `utils/create_skill_intervention_from_skill_probe.ipynb`.
 
@@ -67,7 +67,7 @@ Wandb training loss curves and model configs can be viewed here: https://api.wan
 
 # Testing
 
-To run the end to end test suite, run `pytest -s` from the root directory. This will train and test probes end to end on the 8 layer model, including comparing expected accuracy to actual accuracy within some tolerance. It takes around 12 minutes. The `-s` flag is so you can see the training updates and gauge progress.
+To run the end to end test suite, run `pytest -s` from the root directory. This will first train and test probes end to end on the 8 layer model, including comparing expected accuracy to actual accuracy within some tolerance. Then it will test out board state interventions. It takes around 14 minutes. The `-s` flag is so you can see the training updates and gauge progress.
 
 # References
 
