@@ -395,6 +395,53 @@ def find_spaces_indices(moves_string: str) -> list[int]:
     return indices
 
 
+def get_all_white_piece_prev_pos_indices(
+    moves_string: str, board: chess.Board, move_san: chess.Move
+) -> list[int]:
+    white_pos_indices = get_all_white_pos_indices(moves_string)
+    new_board = board.copy()
+    count = count_turns_with_piece_at_square(new_board, move_san) // 2
+
+    assert moves_string[-1] == ".", f"Last char in moves_string is {moves_string[-1]}"
+    # Because e.g. " 3." has not been counted as a move, but is a sublist in white_pos_indices
+    count += 1
+    # Because we want to include the turn that the move was made on
+    count += 1
+
+    # Flatten the list of lists of ints into a single list of ints
+    correct_indices = [idx for sublist in white_pos_indices[-count:] for idx in sublist]
+
+    return correct_indices
+
+
+def get_all_black_piece_prev_pos_indices(
+    moves_string: str, board: chess.Board, move_san: chess.Move
+) -> list[int]:
+    black_pos_indices = get_all_black_pos_indices(moves_string)
+    new_board = board.copy()
+    count = (count_turns_with_piece_at_square(new_board, move_san) + 1) // 2
+
+    assert moves_string[-1] == ".", f"Last char in moves_string is {moves_string[-1]}"
+
+    # Flatten the list of lists of ints into a single list of ints
+    correct_indices = [idx for sublist in black_pos_indices[-count:] for idx in sublist]
+
+    return correct_indices
+
+
+def count_turns_with_piece_at_square(board: chess.Board, move_san: chess.Move) -> int:
+    source_square = move_san.from_square
+    moved_piece = board.piece_at(source_square)
+    count = 0
+    for _ in range(len(board.move_stack)):
+        board.pop()
+        if board.piece_at(source_square) == moved_piece:
+            count += 1
+        else:
+            break
+    return count
+
+
 def get_all_white_pos_indices(moves_string: str) -> list[list[int]]:
     """From this pgn string: ;1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Qxd4 a6 5.Bc4 Nc6 6.Qd1...
     Return a list of lists of indices that correspond to the chars in parentheses:

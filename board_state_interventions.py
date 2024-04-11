@@ -14,6 +14,7 @@ import train_test_chess
 from jaxtyping import Int, Float, jaxtyped
 from torch import Tensor
 from beartype import beartype
+from typing import Optional
 
 import cProfile
 import pstats
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 GPT_LAYER_COUNT = 8
 DATA_DIR = "data/"
 SAVED_PROBE_DIR = f"linear_probes/saved_probes/"
+SAVED_PROBE_DIR = f"linear_probes/"  # TODO: Remove this line
 RECORDING_DIR = "intervention_logs/"
 SPLIT = "test"
 MODES = 1  # Currently only supporting 1 mode so this is fairly unnecessary
@@ -62,6 +64,7 @@ class InterventionType(Enum):
     SINGLE_SCALE = "single_scale"
     SINGLE_TARGET = "single_target"
     AVERAGE_TARGET = "average_target"
+    BOTH_PROBES = "both_probes"
 
 
 class ModelType(Enum):
@@ -176,6 +179,27 @@ def prepare_intervention_data(
     assert (white_move_indices.shape) == (num_games, num_white_moves)
 
     return probes, state_stacks_all_chars, white_move_indices
+
+
+def get_black_player_probes(
+    intervention_type: InterventionType, probe_names: dict[int, str]
+) -> Optional[dict[int, Float[Tensor, "modes d_model rows cols options"]]]:
+
+    if intervention_type != InterventionType.BOTH_PROBES:
+        return None
+
+    black_player_probes = {}
+    checkpoint = None  # Going to retain the last checkpoint for the config
+
+    for layer, probe_name in probe_names.items():
+        probe_name = probe_name.replace("probe", "black_player_probe")
+        probe_file_location = f"{SAVED_PROBE_DIR}{probe_name}"
+        print(probe_file_location)
+        checkpoint = torch.load(probe_file_location, map_location=torch.device(DEVICE))
+        linear_probe = checkpoint["linear_probe"]
+        black_player_probes[layer] = linear_probe
+
+    return black_player_probes
 
 
 def initialize_output_tracker(probes: dict[int, str]) -> dict:
@@ -446,6 +470,19 @@ def average_probe_empty_cell_value(
     return average_cell_values
 
 
+def extend_intervention_indices(orig_intervention_indices: list[int], max_len: int) -> list[int]:
+    """
+    Extend the intervention_indices list up to max_len if max_len is greater than the last element of the list.
+    Our original intervention indices in ';1.e4 e5 2.' is ';1.e4' and ' 2.'. As the model is sampling characters,
+    we need to extend the indices to the end of the string to ensure we are intervening on all relevant characters.
+    """
+    intervention_indices = orig_intervention_indices.copy()
+    if max_len > intervention_indices[-1]:
+        extension_range = list(range(intervention_indices[-1] + 1, max_len))
+        intervention_indices.extend(extension_range)
+    return intervention_indices
+
+
 # This is a 250 line function, which I'm not thrilled about. However, every sequential step is only used once in this function.
 # I made an initial attempt to break it up into smaller functions, but I found that it made the code harder to follow.
 # I also have limited time to refactor this function, so I'm leaving it as is for now.
@@ -468,6 +505,9 @@ def perform_board_interventions(
     # probe is a tensor of shape (modes, d_model, rows, cols, options)
     # state_stacks_all_chars is a tensor of shape (modes, num_games, pgn_str_length, rows, cols)
     # white_move_indices is a tensor of shape (num_games, num_white_moves)
+
+    black_probes = get_black_player_probes(intervention_type, probe_names)
+
     scale_tracker = initialize_scale_tracker(scales)
     move_counters = MoveCounters()
 
@@ -537,6 +577,23 @@ def perform_board_interventions(
 
             move_counters.possible_moves += 1
 
+            base_intervention_indices = chess_utils.get_all_white_piece_prev_pos_indices(
+                pgn_string, orig_board, model_move_san
+            )
+
+            base_intervention_indices = chess_utils.get_all_white_pos_indices(pgn_string)
+            base_intervention_indices = [
+                idx for sublist in base_intervention_indices for idx in sublist
+            ]
+            black_intervention_indices = chess_utils.get_all_black_pos_indices(pgn_string)
+            black_intervention_indices = [
+                idx for sublist in black_intervention_indices for idx in sublist
+            ]
+            # black_intervention_indices = chess_utils.get_all_black_piece_prev_pos_indices(
+            #     pgn_string, orig_board, model_move_san
+            # )
+            # correct_indices = [idx for sublist in white_pos_indices[-count:] for idx in sublist]
+
             # Step 5.1: Sample n moves from the unmodified model
             # Track how many moves were legal on both the original and modified boards
             move_tracker = sample_moves_from_model(
@@ -595,6 +652,16 @@ def perform_board_interventions(
                     flip_dir = (piece_probe * piece_coefficient) - (blank_probe * blank_coefficient)
                     flip_dir = flip_dir / flip_dir.norm()
 
+                    black_blank_probe = black_probes[layer][:, :, r, c, BLANK_INDEX].squeeze()
+                    black_piece_probe = black_probes[layer][
+                        :, :, r, c, moved_piece_probe_index
+                    ].squeeze()
+
+                    black_flip_dir = (black_piece_probe * piece_coefficient) - (
+                        black_blank_probe * blank_coefficient
+                    )
+                    black_flip_dir = black_flip_dir / black_flip_dir.norm()
+
                     if (
                         intervention_type == InterventionType.AVERAGE_TARGET
                         or intervention_type == InterventionType.SINGLE_TARGET
@@ -612,7 +679,16 @@ def perform_board_interventions(
                         # scale = min(0.3, scale)
                         # print(target, scale)
 
-                    resid[0, :] -= scale * flip_dir
+                    # intervention_indices = list(
+                    #     range(base_intervention_indices[-1], resid.shape[1])
+                    # )
+                    intervention_indices = extend_intervention_indices(
+                        base_intervention_indices, resid.shape[1]
+                    )
+                    trailing_scale = scale * 1.0
+                    resid[0, intervention_indices] -= trailing_scale * flip_dir
+                    # resid[0, base_intervention_indices] -= scale * flip_dir
+                    resid[0, black_intervention_indices] -= scale * 1.0 * black_flip_dir
 
                     # For experimentation with dynamic scale setting
                     # coeff = resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
@@ -709,13 +785,15 @@ def perform_board_interventions(
 if __name__ == "__main__":
 
     scales_lookup: dict[InterventionType, list[float]] = {
-        InterventionType.SINGLE_SCALE: [1.5],
+        InterventionType.SINGLE_SCALE: [1.0, 1.2, 1.5],
+        InterventionType.BOTH_PROBES: [1.0, 1.25, 1.5],
         InterventionType.AVERAGE_TARGET: [9.0],
         InterventionType.SINGLE_TARGET: [-9],
     }
 
     intervention_types = [
-        InterventionType.SINGLE_SCALE,
+        # InterventionType.SINGLE_SCALE,
+        InterventionType.BOTH_PROBES,
     ]
 
     num_games = 200
@@ -723,8 +801,8 @@ if __name__ == "__main__":
     for intervention_type in intervention_types:
 
         probe_names = {}
-        first_layer = 5
-        last_layer = 5
+        first_layer = 3
+        last_layer = 6
 
         for i in range(first_layer, last_layer + 1, 1):
             probe_names[i] = (
