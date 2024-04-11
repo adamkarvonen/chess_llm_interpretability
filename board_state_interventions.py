@@ -179,7 +179,7 @@ def prepare_intervention_data(
 
 
 def initialize_output_tracker(probes: dict[int, str]) -> dict:
-    output_tracker = {}
+    output_tracker: dict[int, dict] = {}
     for layer in probes:
         output_tracker[layer] = {
             "original_blank_probe": [],
@@ -281,7 +281,7 @@ def update_output_tracker_grids(
 
 
 def create_recording_data(
-    move_counters: MoveCounters, scale_tracker: dict[int, MoveTracker]
+    move_counters: MoveCounters, scale_tracker: dict[float, MoveTracker]
 ) -> dict:
     records = {}
     records["orig_model_tracker"] = {}
@@ -308,7 +308,7 @@ def create_recording_data(
 
 def update_move_counters_best_per_move(
     move_counters: MoveCounters,
-    per_move_scale_tracker: dict[int, MoveTracker],
+    per_move_scale_tracker: dict[float, MoveTracker],
 ) -> MoveCounters:
     """For each move, we find the best performing scale parameter. We then increment the move counter trackers with these values.
     The purpose is to get an upper bound on effectiveness if we could dynamically select a good scale parameter.
@@ -440,7 +440,7 @@ def average_probe_empty_cell_value(
 
         # Compute the mean of relevant values if there are any, otherwise return 0
         if relevant_values.nelement() == 0:
-            average_cell_values[layer] = 0
+            average_cell_values[layer] = 0.0
         else:
             average_cell_values[layer] = relevant_values.mean().item()
     return average_cell_values
@@ -498,9 +498,9 @@ def perform_board_interventions(
 
             # Step 2: Get the model move at move_of_interest
             # model_input.shape is (1, move_of_interest_index + 1)
-            model_input = chess_utils.encode_string(META, pgn_string)
+            encoded_input = chess_utils.encode_string(META, pgn_string)
             # model input shape: (1, pgn_str_length)
-            model_input = torch.tensor(model_input).unsqueeze(0).to(DEVICE)
+            model_input = torch.tensor(encoded_input).unsqueeze(0).to(DEVICE)
             argmax_model_move = chess_utils.get_model_move(
                 probe_data.model, META, model_input, temperature=0.0
             )
@@ -517,6 +517,8 @@ def perform_board_interventions(
 
             # Step 4: Determine which piece was moved from which source square
             moved_piece = orig_board.piece_at(model_move_san.from_square)
+            if moved_piece is None:
+                raise Exception("No piece found at source square")
             moved_piece_int = chess_utils.PIECE_TO_INT[moved_piece.piece_type]
             moved_piece_probe_index = chess_utils.PIECE_TO_ONE_HOT_MAPPING[moved_piece_int]
             r, c = chess_utils.square_to_coordinate(model_move_san.from_square)
@@ -706,7 +708,7 @@ def perform_board_interventions(
 
 if __name__ == "__main__":
 
-    scales_lookup = {
+    scales_lookup: dict[InterventionType, list[float]] = {
         InterventionType.SINGLE_SCALE: [1.5],
         InterventionType.AVERAGE_TARGET: [9.0],
         InterventionType.SINGLE_TARGET: [-9],
