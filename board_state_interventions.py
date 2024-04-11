@@ -583,7 +583,7 @@ def perform_board_interventions(
                 # Multiply it by some scale factor, then subtract it from the model's activations
                 # If we make this function more modular and pass all variables in (probes, r, c, etc), it is much slower
                 def flip_hook(
-                    resid,
+                    resid,  # shape is (1, num_white_moves, d_model)
                     hook,
                     layer: int,
                     scale: float = 0.1,
@@ -612,7 +612,7 @@ def perform_board_interventions(
                         # scale = min(0.3, scale)
                         # print(target, scale)
 
-                    resid[:, -1] -= scale * flip_dir
+                    resid[0, :] -= scale * flip_dir
 
                     # For experimentation with dynamic scale setting
                     # coeff = resid[0, move_of_interest_index] @ flip_dir / flip_dir.norm()
