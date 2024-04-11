@@ -188,7 +188,7 @@ def init_logging_dict(
         "model_name": model_name,
         "n_layers": n_layers,
         "wandb_run_name": wandb_run_name,
-        "player_color": config.player_color,
+        "player_color": config.player_color.value,
     }
 
     return logging_dict
