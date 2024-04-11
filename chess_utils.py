@@ -395,38 +395,6 @@ def find_spaces_indices(moves_string: str) -> list[int]:
     return indices
 
 
-def get_all_white_piece_prev_pos_indices(
-    moves_string: str, board: chess.Board, move_san: chess.Move
-) -> list[int]:
-    white_pos_indices = get_all_white_pos_indices(moves_string)
-    new_board = board.copy()
-    count = count_turns_with_piece_at_square(new_board, move_san) // 2
-
-    assert moves_string[-1] == ".", f"Last char in moves_string is {moves_string[-1]}"
-    # Because e.g. " 3." has not been counted as a move, but is a sublist in white_pos_indices
-    count += 1
-    # Because we want to include the turn that the move was made on
-    count += 1
-
-    # Flatten the list of lists of ints into a single list of ints
-    correct_indices = [idx for sublist in white_pos_indices[-count:] for idx in sublist]
-
-    return correct_indices
-
-
-def count_turns_with_piece_at_square(board: chess.Board, move_san: chess.Move) -> int:
-    source_square = move_san.from_square
-    moved_piece = board.piece_at(source_square)
-    count = 0
-    for _ in range(len(board.move_stack)):
-        board.pop()
-        if board.piece_at(source_square) == moved_piece:
-            count += 1
-        else:
-            break
-    return count
-
-
 def get_all_white_pos_indices(moves_string: str) -> list[list[int]]:
     """From this pgn string: ;1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Qxd4 a6 5.Bc4 Nc6 6.Qd1...
     Return a list of lists of indices that correspond to the chars in parentheses:
@@ -455,6 +423,10 @@ def get_all_black_pos_indices(moves_string: str) -> list[list[int]]:
     (;1.e4)< c5>( 2.Nf3)< d6>( 3.d4)< cxd4>( 4.Qxd4)< a6>( 5.Bc4)< Nc6>( 6.Qd1)"""
     space_indices = find_spaces_indices(moves_string)
     black_move_indices: list[list[int]] = []
+
+    if len(space_indices) == 0:
+        return []
+
     start_index = space_indices[0]
 
     for i, space in enumerate(space_indices):
@@ -543,23 +515,17 @@ def find_custom_indices(
 
 def encode_string(meta: dict, s: str) -> list[int]:
     """Encode a string into a list of integers."""
-    # This is how you get meta
-    # with open("meta.pkl", "rb") as f:
-    #     meta = pickle.load(f)
     stoi = meta["stoi"]
     return [stoi[c] for c in s]
 
 
 def decode_list(meta: dict, l: list[int]) -> str:
     """Decode a list of integers into a string."""
-    # with open("meta.pkl", "rb") as f:
-    #     meta = pickle.load(f)
     itos = meta["itos"]
     return "".join([itos[i] for i in l])
 
 
 # Adapted from nanogpt
-@torch.no_grad()
 def get_model_move(
     model,
     meta: dict,
@@ -576,29 +542,30 @@ def get_model_move(
 
     input_length = len(idx[0])
     space_idx = encode_string(meta, " ")[0]
-    for _ in range(max_new_tokens):
-        # if the sequence context is growing too long we must crop it at block_size
-        idx_cond = idx if idx.size(1) <= block_size else idx[:, -block_size:]
-        if temperature == 0.0:
-            # greedy decoding
-            # model(idx_cond) is a tensor of shape (batch_size, sequence_length, vocab_size)
-            # logits is a tensor of shape (batch_size, vocab_size)
-            # idx_next is a tensor of shape (batch_size, 1)
-            logits = model(idx_cond)[:, -1, :]
-            idx_next = torch.argmax(logits, dim=-1).unsqueeze(-1)
-        else:
-            # forward the model to get the logits for the index in the sequence
-            logits = model(idx_cond)
-            # pluck the logits at the final step and scale by desired temperature
-            logits = logits[:, -1, :] / temperature
-            # apply softmax to convert logits to (normalized) probabilities
-            probs = F.softmax(logits, dim=-1)
-            # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1)
-        if idx_next[0] == space_idx:
-            break
-        # append sampled index to the running sequence and continue
-        idx = torch.cat((idx, idx_next), dim=1)
+    with torch.inference_mode():
+        for _ in range(max_new_tokens):
+            # if the sequence context is growing too long we must crop it at block_size
+            idx_cond = idx if idx.size(1) <= block_size else idx[:, -block_size:]
+            if temperature == 0.0:
+                # greedy decoding
+                # model(idx_cond) is a tensor of shape (batch_size, sequence_length, vocab_size)
+                # logits is a tensor of shape (batch_size, vocab_size)
+                # idx_next is a tensor of shape (batch_size, 1)
+                logits = model(idx_cond)[:, -1, :]
+                idx_next = torch.argmax(logits, dim=-1).unsqueeze(-1)
+            else:
+                # forward the model to get the logits for the index in the sequence
+                logits = model(idx_cond)
+                # pluck the logits at the final step and scale by desired temperature
+                logits = logits[:, -1, :] / temperature
+                # apply softmax to convert logits to (normalized) probabilities
+                probs = F.softmax(logits, dim=-1)
+                # sample from the distribution
+                idx_next = torch.multinomial(probs, num_samples=1)
+            if idx_next[0] == space_idx:
+                break
+            # append sampled index to the running sequence and continue
+            idx = torch.cat((idx, idx_next), dim=1)
 
     model_response = idx[:, input_length:]
     model_move = decode_list(meta, model_response[0].tolist())
