@@ -395,6 +395,44 @@ def find_spaces_indices(moves_string: str) -> list[int]:
     return indices
 
 
+def get_all_white_pos_indices(moves_string: str) -> list[int]:
+    """From this pgn string: ;1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Qxd4 a6 5.Bc4 Nc6 6.Qd1...
+    Return a list of indices that correspond to the chars in parentheses:
+    (;1.e4)< c5>( 2.Nf3)< d6>( 3.d4)< cxd4>( 4.Qxd4)< a6>( 5.Bc4)< Nc6>( 6.Qd1)"""
+    space_indices = find_spaces_indices(moves_string)
+    white_move_indices: list[int] = []
+    start_index = 0
+
+    for i, space in enumerate(space_indices):
+        if i % 2 == 1:
+            start_index = space
+            if i == len(space_indices) - 1:
+                white_move_indices.extend(range(start_index, len(moves_string)))
+                break
+            continue
+        white_move_indices.extend(range(start_index, space))
+    return white_move_indices
+
+
+def get_all_black_pos_indices(moves_string: str) -> list[int]:
+    """From this pgn string: ;1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Qxd4 a6 5.Bc4 Nc6 6.Qd1...
+    Return a list of indices that correspond to the chars in brackets:
+    (;1.e4)< c5>( 2.Nf3)< d6>( 3.d4)< cxd4>( 4.Qxd4)< a6>( 5.Bc4)< Nc6>( 6.Qd1)"""
+    space_indices = find_spaces_indices(moves_string)
+    black_move_indices: list[int] = []
+    start_index = space_indices[0]
+
+    for i, space in enumerate(space_indices):
+        if i % 2 == 0:
+            start_index = space
+            if i == len(space_indices) - 1:
+                black_move_indices.extend(range(start_index, len(moves_string)))
+                break
+            continue
+        black_move_indices.extend(range(start_index, space))
+    return black_move_indices
+
+
 def find_odd_spaces_indices(moves_string: str) -> list[int]:
     """Returns a list of ints of odd indices of every ' ' in the string.
     There is some duplicated logic but it simplifies using the Callable function."""
