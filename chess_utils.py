@@ -395,41 +395,76 @@ def find_spaces_indices(moves_string: str) -> list[int]:
     return indices
 
 
-def get_all_white_pos_indices(moves_string: str) -> list[int]:
+def get_all_white_piece_prev_pos_indices(
+    moves_string: str, board: chess.Board, move_san: chess.Move
+) -> list[int]:
+    white_pos_indices = get_all_white_pos_indices(moves_string)
+    new_board = board.copy()
+    count = count_turns_with_piece_at_square(new_board, move_san) // 2
+
+    assert moves_string[-1] == ".", f"Last char in moves_string is {moves_string[-1]}"
+    # Because e.g. " 3." has not been counted as a move, but is a sublist in white_pos_indices
+    count += 1
+    # Because we want to include the turn that the move was made on
+    count += 1
+
+    # Flatten the list of lists of ints into a single list of ints
+    correct_indices = [idx for sublist in white_pos_indices[-count:] for idx in sublist]
+
+    return correct_indices
+
+
+def count_turns_with_piece_at_square(board: chess.Board, move_san: chess.Move) -> int:
+    source_square = move_san.from_square
+    moved_piece = board.piece_at(source_square)
+    count = 0
+    for _ in range(len(board.move_stack)):
+        board.pop()
+        if board.piece_at(source_square) == moved_piece:
+            count += 1
+        else:
+            break
+    return count
+
+
+def get_all_white_pos_indices(moves_string: str) -> list[list[int]]:
     """From this pgn string: ;1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Qxd4 a6 5.Bc4 Nc6 6.Qd1...
-    Return a list of indices that correspond to the chars in parentheses:
+    Return a list of lists of indices that correspond to the chars in parentheses:
     (;1.e4)< c5>( 2.Nf3)< d6>( 3.d4)< cxd4>( 4.Qxd4)< a6>( 5.Bc4)< Nc6>( 6.Qd1)"""
     space_indices = find_spaces_indices(moves_string)
-    white_move_indices: list[int] = []
+    white_move_indices: list[list[int]] = []
     start_index = 0
+
+    if len(space_indices) == 0:
+        return [list(range(0, len(moves_string)))]
 
     for i, space in enumerate(space_indices):
         if i % 2 == 1:
             start_index = space
             if i == len(space_indices) - 1:
-                white_move_indices.extend(range(start_index, len(moves_string)))
+                white_move_indices.append(list(range(start_index, len(moves_string))))
                 break
             continue
-        white_move_indices.extend(range(start_index, space))
+        white_move_indices.append(list(range(start_index, space)))
     return white_move_indices
 
 
-def get_all_black_pos_indices(moves_string: str) -> list[int]:
+def get_all_black_pos_indices(moves_string: str) -> list[list[int]]:
     """From this pgn string: ;1.e4 c5 2.Nf3 d6 3.d4 cxd4 4.Qxd4 a6 5.Bc4 Nc6 6.Qd1...
-    Return a list of indices that correspond to the chars in brackets:
+    Return a list of lists of indices that correspond to the chars in brackets:
     (;1.e4)< c5>( 2.Nf3)< d6>( 3.d4)< cxd4>( 4.Qxd4)< a6>( 5.Bc4)< Nc6>( 6.Qd1)"""
     space_indices = find_spaces_indices(moves_string)
-    black_move_indices: list[int] = []
+    black_move_indices: list[list[int]] = []
     start_index = space_indices[0]
 
     for i, space in enumerate(space_indices):
         if i % 2 == 0:
             start_index = space
             if i == len(space_indices) - 1:
-                black_move_indices.extend(range(start_index, len(moves_string)))
+                black_move_indices.append(list(range(start_index, len(moves_string))))
                 break
             continue
-        black_move_indices.extend(range(start_index, space))
+        black_move_indices.append(list(range(start_index, space)))
     return black_move_indices
 
 
