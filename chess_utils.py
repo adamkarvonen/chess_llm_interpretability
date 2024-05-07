@@ -125,6 +125,24 @@ def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> tor
     return state
 
 
+def board_to_pin_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
+    """Given a chess board object, return a 1x1 torch.Tensor.
+    The 1x1 array indicates if there are any pins on the board (1 = yes, 0 = no)."""
+
+    state = torch.zeros((1, 1), dtype=torch.int)
+
+    # NOTE: Due to the model's MINE / YOURS / BLANK ontology, we should check for White XOR Black pins
+    for color in [chess.WHITE]:
+        for i in range(64):
+            piece = board.piece_at(i)
+            if piece and piece.color == color:
+                if board.is_pinned(color, i):
+                    state[0, 0] = 1
+                    return state
+
+    return state
+
+
 def board_to_threat_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
     """Given a chess board object, return an 8x8 torch.Tensor.
     The 8x8 array should tell if each square is being attacked by the opponent."""
@@ -262,7 +280,7 @@ def create_state_stack(
     count = 1
 
     # Scan 1: Creates states, with length = number of moves in the game
-    initial_states.append(custom_board_to_state_fn(board, skill))
+    initial_states.append(custom_board_to_state_fn(board, skill).to(dtype=torch.int8))
     # Apply each move to the board
     for move in moves_string.split():
         try:
@@ -273,7 +291,7 @@ def create_state_stack(
             else:
                 board.push_san(move)
 
-            initial_states.append(custom_board_to_state_fn(board, skill))
+            initial_states.append(custom_board_to_state_fn(board, skill).to(dtype=torch.int8))
         except:
             # because all games are truncated to len 680, often the last move is partial and invalid
             # so we don't need to log this, as it will happen on most games
@@ -357,7 +375,7 @@ def state_stack_to_one_hot(
         num_cols,
         range_size,
         device=device,
-        dtype=torch.int,
+        dtype=torch.int8,
     )
 
     for val in mapping:
@@ -601,6 +619,15 @@ piece_config = Config(
     max_val=6,
     custom_board_state_function=board_to_piece_state,
     linear_probe_name="chess_piece_probe",
+)
+
+pin_config = Config(
+    min_val=0,
+    max_val=1,
+    custom_board_state_function=board_to_pin_state,
+    num_rows=1,
+    num_cols=1,
+    linear_probe_name="chess_pin_probe",
 )
 
 color_config = Config(
