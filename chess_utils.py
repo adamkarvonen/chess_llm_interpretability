@@ -43,20 +43,20 @@ def board_to_random_state(board: chess.Board, skill: Optional[int] = None) -> to
     Every square should be randomly assigned to 1, -1, or 0.
     This is to sanity check the linear probe.
     In the 8x8 array, row 0 is A1-H1 (White), row 1 is A2-H2, etc."""
-    state = torch.zeros((8, 8), dtype=torch.int)
+    state_RR = torch.zeros((8, 8), dtype=torch.int)
     for i in range(64):
-        state[i // 8, i % 8] = torch.randint(-1, 2, (1,))
+        state_RR[i // 8, i % 8] = torch.randint(-1, 2, (1,))
 
-    return state
+    return state_RR
 
 
 def board_to_skill_state(board: chess.Board, skill: float) -> torch.Tensor:
     """Given a chess board object, return a 1x1 torch.Tensor.
     The 1x1 array should tell what skill level the player is."""
-    state = torch.zeros((1, 1), dtype=torch.int)
-    state[0][0] = skill
+    state_RR = torch.zeros((1, 1), dtype=torch.int)
+    state_RR[0][0] = skill
 
-    return state
+    return state_RR
 
 
 # import chess.engine
@@ -74,20 +74,20 @@ def board_to_eval_state(board: chess.Board, skill: Optional[int] = None) -> torc
     in a lookup table. But, then we couldn't cleanly use this with the existing abstractions.
     To use this function, uncomment the import chess.engine through engine = above, and the internal code below.
     """
-    state = torch.zeros((1, 1), dtype=torch.int)
+    state_RR = torch.zeros((1, 1), dtype=torch.int)
 
     # info = engine.analyse(board, chess.engine.Limit(time=0.01))
     # score = info["score"].white().score(mate_score=10000)
 
     # # Modify player_one_score based on the score
     # if score < 100:
-    #     state[0][0] = -1
+    #     state_RR[0][0] = -1
     # elif score > 100:
-    #     state[0][0] = 1
+    #     state_RR[0][0] = 1
     # else:
-    #     state[0][0] = 0
+    #     state_RR[0][0] = 0
 
-    return state
+    return state_RR
 
 
 def board_to_piece_color_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
@@ -95,14 +95,14 @@ def board_to_piece_color_state(board: chess.Board, skill: Optional[int] = None) 
     The 8x8 array should tell if each square is black, white, or blank.
     White is 1, black is -1, and blank is 0.
     In the 8x8 array, row 0 is A1-H1 (White), row 1 is A2-H2, etc."""
-    state = torch.zeros((8, 8), dtype=torch.int)
+    state_RR = torch.zeros((8, 8), dtype=torch.int)
     for i in range(64):
         piece = board.piece_at(i)
         if piece:
             # Assign 1 for white pieces and -1 for black pieces
-            state[i // 8, i % 8] = 1 if piece.color == chess.WHITE else -1
+            state_RR[i // 8, i % 8] = 1 if piece.color == chess.WHITE else -1
 
-    return state
+    return state_RR
 
 
 def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
@@ -111,8 +111,8 @@ def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> tor
     Blank squares should be 0.
     In the 8x8 array, row 0 is A1-H1 (White), row 1 is A2-H2, etc."""
 
-    # Because state is initialized to all 0s, we only need to change the values of the pieces
-    state = torch.zeros((8, 8), dtype=torch.int)
+    # Because state_RR is initialized to all 0s, we only need to change the values of the pieces
+    state_RR = torch.zeros((8, 8), dtype=torch.int)
     for i in range(64):
         piece = board.piece_at(i)
         if piece:
@@ -120,16 +120,16 @@ def board_to_piece_state(board: chess.Board, skill: Optional[int] = None) -> tor
             # Multiply by -1 if the piece is black
             if piece.color == chess.BLACK:
                 piece_value *= -1
-            state[i // 8, i % 8] = piece_value
+            state_RR[i // 8, i % 8] = piece_value
 
-    return state
+    return state_RR
 
 
 def board_to_pin_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
     """Given a chess board object, return a 1x1 torch.Tensor.
     The 1x1 array indicates if there are any pins on the board (1 = yes, 0 = no)."""
 
-    state = torch.zeros((1, 1), dtype=torch.int)
+    state_RR = torch.zeros((1, 1), dtype=torch.int)
 
     # NOTE: Due to the model's MINE / YOURS / BLANK ontology, we should check for White XOR Black pins
     for color in [chess.WHITE]:
@@ -137,10 +137,10 @@ def board_to_pin_state(board: chess.Board, skill: Optional[int] = None) -> torch
             piece = board.piece_at(i)
             if piece and piece.color == color:
                 if board.is_pinned(color, i):
-                    state[0, 0] = 1
-                    return state
+                    state_RR[0, 0] = 1
+                    return state_RR
 
-    return state
+    return state_RR
 
 
 def board_to_threat_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
@@ -149,12 +149,12 @@ def board_to_threat_state(board: chess.Board, skill: Optional[int] = None) -> to
 
     ATTACKING_COLOR = chess.BLACK
     # Because state is initialized to all 0s, we only need to change the values of the pieces
-    state = torch.zeros((8, 8), dtype=torch.int)
+    state_RR = torch.zeros((8, 8), dtype=torch.int)
     for i in range(64):
         if board.is_attacked_by(ATTACKING_COLOR, i):
-            state[i // 8, i % 8] = 1
+            state_RR[i // 8, i % 8] = 1
 
-    return state
+    return state_RR
 
 
 def board_to_prev_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
@@ -162,12 +162,12 @@ def board_to_prev_state(board: chess.Board, skill: Optional[int] = None) -> torc
     The 8x8 array should tell what piece is on each square at a previous board state."""
 
     PREVIOUS_TURNS = 25
-    state = torch.zeros((8, 8), dtype=torch.int)
+    state_RR = torch.zeros((8, 8), dtype=torch.int)
 
     # If we cannot roll back PREVIOUS_TURNS, return a blank state
     # Predicting blank states is trivial, so be careful and change pos_start to not index into the blank states
     if len(board.move_stack) < PREVIOUS_TURNS:
-        return state
+        return state_RR
 
     new_board = board.copy()
 
@@ -181,9 +181,9 @@ def board_to_prev_state(board: chess.Board, skill: Optional[int] = None) -> torc
             # Multiply by -1 if the piece is black
             if piece.color == chess.BLACK:
                 piece_value *= -1
-            state[i // 8, i % 8] = piece_value
+            state_RR[i // 8, i % 8] = piece_value
 
-    return state
+    return state_RR
 
 
 def board_to_legal_moves_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
@@ -194,17 +194,17 @@ def board_to_legal_moves_state(board: chess.Board, skill: Optional[int] = None) 
     """
     MOVING_COLOR = chess.WHITE
     # Initialize the state array with all zeros
-    state = torch.zeros((8, 8), dtype=torch.int)
+    state_RR = torch.zeros((8, 8), dtype=torch.int)
 
     # Iterate through all legal moves for White
     for move in board.legal_moves:
         # Check if the move is for a White piece
         if board.color_at(move.from_square) == MOVING_COLOR:
-            # Update the state array for the destination square of the move
+            # Update the state_RR array for the destination square of the move
             to_square = move.to_square
-            state[to_square // 8, to_square % 8] = 1
+            state_RR[to_square // 8, to_square % 8] = 1
 
-    return state
+    return state_RR
 
 
 def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = None) -> torch.Tensor:
@@ -217,7 +217,7 @@ def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = Non
     state_stack_one_hot = state_stack_one_hot[:, :, 1:, :, :, :]
     """
 
-    state = torch.zeros((8, 8), dtype=torch.int)
+    state_RR = torch.zeros((8, 8), dtype=torch.int)
 
     # If offset is 2, we are predicting the LLM's next move
     # If offset is 1, we are predicting the opponent's response to the LLM's next move
@@ -225,7 +225,7 @@ def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = Non
 
     # If there is no last move (such as beginning of game), return the state as is
     if len(board.move_stack) < offset:
-        return state
+        return state_RR
 
     last_last_move = board.move_stack[-offset]
     destination_square = last_last_move.to_square
@@ -235,17 +235,17 @@ def board_to_last_self_move_state(board: chess.Board, skill: Optional[int] = Non
     piece_value = PIECE_TO_INT[moved_piece.piece_type]
     if moved_piece.color == chess.BLACK:
         piece_value *= -1
-    state[destination_square // 8, destination_square % 8] = piece_value
+    state_RR[destination_square // 8, destination_square % 8] = piece_value
 
-    return state
+    return state_RR
 
 
-def state_stack_to_chess_board(state: torch.Tensor) -> chess.Board:
+def state_stack_to_chess_board(state_RR: torch.Tensor) -> chess.Board:
     """Given a state stack, return a chess.Board object.
     WARNING: The board will not include any information about whose turn it is, castling rights, en passant, etc.
     For this reason, pgn_string_to_board is preferred."""
     board = chess.Board(fen=None)
-    for row_idx, row in enumerate(state):
+    for row_idx, row in enumerate(state_RR):
         for col_idx, piece in enumerate(row):
             if piece != 0:
                 piece_type = abs(piece)
@@ -276,11 +276,11 @@ def create_state_stack(
     """Given a string of PGN format moves, create an 8x8 torch.Tensor for every character in the string."""
 
     board = chess.Board()
-    initial_states = []
+    initial_states_lRR = []
     count = 1
 
     # Scan 1: Creates states, with length = number of moves in the game
-    initial_states.append(custom_board_to_state_fn(board, skill).to(dtype=torch.int8))
+    initial_states_lRR.append(custom_board_to_state_fn(board, skill).to(dtype=torch.int8))
     # Apply each move to the board
     for move in moves_string.split():
         try:
@@ -291,7 +291,7 @@ def create_state_stack(
             else:
                 board.push_san(move)
 
-            initial_states.append(custom_board_to_state_fn(board, skill).to(dtype=torch.int8))
+            initial_states_lRR.append(custom_board_to_state_fn(board, skill).to(dtype=torch.int8))
         except:
             # because all games are truncated to len 680, often the last move is partial and invalid
             # so we don't need to log this, as it will happen on most games
@@ -304,16 +304,16 @@ def create_state_stack(
 
     # Second Scan: Expand states to match the length of moves_string
     # For ;1.e4 e5 2.Nf3, ";1.e4" = idx 0, " e5" = idx 1, " 2.Nf3" = idx 2
-    expanded_states = []
+    expanded_states_lRR = []
     move_index = 0
     for char in moves_string:
         if char == " ":
             move_index += 1
-        expanded_states.append(initial_states[min(move_index, len(initial_states) - 1)])
+        expanded_states_lRR.append(initial_states_lRR[min(move_index, len(initial_states_lRR) - 1)])
 
     # expanded_states.append(initial_states[-1]) # The last element in expanded_states is the final position of the board.
     # Currently not using this as len(expanded_states) would be 1 greater than len(moves_string) and that would be confusing.
-    return torch.stack(expanded_states)
+    return torch.stack(expanded_states_lRR)
 
 
 def create_state_stacks(
@@ -324,21 +324,21 @@ def create_state_stacks(
     """Given a list of strings of PGN format moves, create a tensor of shape (len(moves_strings), 8, 8).
     custom_board_to_state is a function that takes a chess.Board object and returns a 8x8 torch.Tensor for
     board state, or 1x1 for centipawn advantage."""
-    state_stacks = []
+    state_stacks_BlRR = []
     skill = None
 
     for idx, pgn_string in enumerate(moves_strings):
         if skill_array is not None:
             skill = skill_array[idx]
-        state_stack = create_state_stack(pgn_string, custom_board_to_state_fn, skill)
+        state_stack_lRR = create_state_stack(pgn_string, custom_board_to_state_fn, skill)
 
-        state_stacks.append(state_stack)
+        state_stacks_BlRR.append(state_stack_lRR)
 
     # Convert the list of tensors to a single tensor
-    final_state_stack = torch.stack(state_stacks)
-    final_state_stack = final_state_stack.unsqueeze(0)  # Add a dimension for the modes
+    final_state_stack_BlRR = torch.stack(state_stacks_BlRR)
+    final_state_stack_MBlRR = final_state_stack_BlRR.unsqueeze(0)  # Add a dimension for the modes
     # Currently, there is just one mode and it isn't necessary. For now, I'm maintaining the dimension for future use.
-    return final_state_stack
+    return final_state_stack_MBlRR
 
 
 def state_stack_to_one_hot(
@@ -348,7 +348,7 @@ def state_stack_to_one_hot(
     min_val: int,
     max_val: int,
     device: torch.device,
-    state_stack: torch.Tensor,
+    state_stack_MBLRR: torch.Tensor,
     user_mapping: Optional[dict[int, int]] = None,
 ) -> Int[Tensor, "modes sample_size num_white_moves rows cols one_hot_range"]:
     """Input shape: assert(state_stacks_all_chars.shape) == (modes, sample_size, game_length, rows, cols)
@@ -367,10 +367,10 @@ def state_stack_to_one_hot(
             mapping[val] = val - min_val
 
     # Initialize the one-hot tensor
-    one_hot = torch.zeros(
-        state_stack.shape[0],  # num modes
-        state_stack.shape[1],  # num games
-        state_stack.shape[2],  # num moves
+    one_hot_MBLRRC = torch.zeros(
+        state_stack_MBLRR.shape[0],  # num modes
+        state_stack_MBLRR.shape[1],  # num games
+        state_stack_MBLRR.shape[2],  # num moves
         num_rows,
         num_cols,
         range_size,
@@ -379,18 +379,16 @@ def state_stack_to_one_hot(
     )
 
     for val in mapping:
-        one_hot[..., mapping[val]] = state_stack == val
+        one_hot_MBLRRC[..., mapping[val]] = state_stack_MBLRR == val
 
-    return one_hot
+    return one_hot_MBLRRC
 
 
-def one_hot_to_state_stack(one_hot: torch.Tensor, min_val: int) -> torch.Tensor:
-    """Input shape: assert(probe_out.shape) == (modes, sample_size, num_white_moves, rows, cols, one_hot_range)
-    Output shape: assert(state_stacks_probe_outputs.shape) == (modes, sample_size, num_white_moves, rows, cols)
-    """
-    indices = torch.argmax(one_hot, dim=-1)
-    state_stack = indices + min_val
-    return state_stack
+def one_hot_to_state_stack(one_hot_MBLRRC: torch.Tensor, min_val: int) -> torch.Tensor:
+    """We assume input shape UBLRRC, but it could work with other shapes."""
+    indices = torch.argmax(one_hot_MBLRRC, dim=-1)
+    state_stack_MBLRR = indices + min_val
+    return state_stack_MBLRR
 
 
 def square_to_coordinate(square: chess.Square) -> tuple[int, int]:

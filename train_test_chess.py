@@ -201,40 +201,40 @@ def get_board_seqs_string(df: pd.DataFrame) -> list[str]:
         df["transcript"].apply(lambda x: len(x) == row_length)
     ), "Not all transcripts are of length {}".format(row_length)
 
-    board_seqs_string = df["transcript"]
+    board_seqs_string_Bl = df["transcript"]
 
     logger.info(
-        f"Number of games: {len(board_seqs_string)},length of a game in chars: {len(board_seqs_string[0])}"
+        f"Number of games: {len(board_seqs_string_Bl)},length of a game in chars: {len(board_seqs_string_Bl[0])}"
     )
-    return board_seqs_string
+    return board_seqs_string_Bl
 
 
 @jaxtyped(typechecker=beartype)
 def get_board_seqs_int(df: pd.DataFrame) -> Int[Tensor, "num_games pgn_str_length"]:
     encoded_df = df["transcript"].apply(encode)
     logger.info(encoded_df.head())
-    board_seqs_int = torch.tensor(encoded_df.apply(list).tolist())
-    logger.info(f"board_seqs_int shape: {board_seqs_int.shape}")
-    return board_seqs_int
+    board_seqs_int_Bl = torch.tensor(encoded_df.apply(list).tolist())
+    logger.info(f"board_seqs_int shape: {board_seqs_int_Bl.shape}")
+    return board_seqs_int_Bl
 
 
 @jaxtyped(typechecker=beartype)
 def get_skill_stack(config: Config, df: pd.DataFrame) -> Int[Tensor, "num_games"]:
     skill_levels_list = df[config.column_name].tolist()
 
-    skill_stack = torch.tensor(skill_levels_list)
-    logger.info(f"Unique values in skill_stack: {skill_stack.unique()}")
-    logger.info(f"skill_stack shape: {skill_stack.shape}")
-    return skill_stack
+    skill_stack_B = torch.tensor(skill_levels_list)
+    logger.info(f"Unique values in skill_stack: {skill_stack_B.unique()}")
+    logger.info(f"skill_stack shape: {skill_stack_B.shape}")
+    return skill_stack_B
 
 
 # @jaxtyped(typechecker=beartype) # typechecking not supported for callable
 def get_custom_indices(
     custom_indexing_function: callable, df: pd.DataFrame
 ) -> Int[Tensor, "num_games num_white_moves"]:
-    custom_indices = chess_utils.find_custom_indices(custom_indexing_function, df)
-    logger.info(f"custom_indices shape: {custom_indices.shape}")
-    return custom_indices
+    custom_indices_BL = chess_utils.find_custom_indices(custom_indexing_function, df)
+    logger.info(f"custom_indices shape: {custom_indices_BL.shape}")
+    return custom_indices_BL
 
 
 @jaxtyped(typechecker=beartype)
@@ -248,88 +248,92 @@ def prepare_data_batch(
     dict[int, Float[Tensor, "batch_size num_white_moves d_model"]],
 ]:
     list_of_indices = indices.tolist()  # For indexing into the board_seqs_string list of strings
-    games_int = probe_data.board_seqs_int[indices]  # games_int shape (batch_size, pgn_str_length)
-    games_str = [probe_data.board_seqs_string[idx] for idx in list_of_indices]
-    games_str = [s[:] for s in games_str]
-    games_dots = probe_data.custom_indices[indices]
-    games_dots = games_dots[
+    games_int_Bl = probe_data.board_seqs_int[
+        indices
+    ]  # games_int shape (batch_size, pgn_str_length)
+    games_str_Bl = [probe_data.board_seqs_string[idx] for idx in list_of_indices]
+    games_str_Bl = [s[:] for s in games_str_Bl]
+    games_dots_BL = probe_data.custom_indices[indices]
+    games_dots_BL = games_dots_BL[
         :, config.pos_start : config.pos_end
     ]  # games_dots shape (batch_size, num_white_moves)
 
     if config.probing_for_skill:
-        games_skill = probe_data.skill_stack[indices]  # games_skill shape (batch_size,)
+        games_skill_B = probe_data.skill_stack[indices]  # games_skill shape (batch_size,)
     else:
-        games_skill = None
+        games_skill_B = None
 
-    state_stack = chess_utils.create_state_stacks(
-        games_str, config.custom_board_state_function, games_skill
+    state_stack_MBlRR = chess_utils.create_state_stacks(
+        games_str_Bl, config.custom_board_state_function, games_skill_B
     )  # shape (modes, batch_size, pgn_str_length, num_rows, num_cols)
-    indexed_state_stacks = []
+    indexed_state_stacks_MBLRR = []
 
     for batch_idx in range(BATCH_SIZE):
         # Get the indices for the current batch
-        dots_indices_for_batch = games_dots[batch_idx]
+        dots_indices_for_batch_L = games_dots_BL[batch_idx]
 
         # Index the state_stack for the current batch
-        indexed_state_stack = state_stack[:, batch_idx, dots_indices_for_batch, :, :]
+        indexed_state_stack_MLRR = state_stack_MBlRR[:, batch_idx, dots_indices_for_batch_L, :, :]
 
         # Append the result to the list
-        indexed_state_stacks.append(indexed_state_stack)
+        indexed_state_stacks_MBLRR.append(indexed_state_stack_MLRR)
 
     # Stack the indexed state stacks along the first dimension
-    state_stack = torch.stack(
-        indexed_state_stacks
+    state_stack_BMLRR = torch.stack(
+        indexed_state_stacks_MBLRR
     )  # shape (batch_size, modes, num_white_moves, num_rows, num_cols)
 
     # Use einops to rearrange the dimensions after stacking
-    state_stack = einops.rearrange(
-        state_stack, "batch modes pos row col -> modes batch pos row col"
+    state_stack_MBLRR = einops.rearrange(
+        state_stack_BMLRR, "batch modes pos row col -> modes batch pos row col"
     )  # shape (modes, batch_size, num_white_moves, num_rows, num_cols)
 
-    state_stack_one_hot = chess_utils.state_stack_to_one_hot(
+    state_stack_one_hot_MBLRRC = chess_utils.state_stack_to_one_hot(
         TRAIN_PARAMS.modes,
         config.num_rows,
         config.num_cols,
         config.min_val,
         config.max_val,
         DEVICE,
-        state_stack,
+        state_stack_MBLRR,
         probe_data.user_state_dict_one_hot_mapping,
     ).to(
         DEVICE
     )  # shape (modes, batch_size, num_white_moves, num_rows, num_cols, num_options)
 
-    resid_post_dict = {}
+    resid_post_dict_BLD = {}
 
     with torch.inference_mode():
-        _, cache = probe_data.model.run_with_cache(games_int.to(DEVICE)[:, :-1], return_type=None)
+        _, cache = probe_data.model.run_with_cache(
+            games_int_Bl.to(DEVICE)[:, :-1], return_type=None
+        )
         for layer in layers:
-            resid_post_dict[layer] = cache["resid_post", layer][
+            resid_post_dict_BLD[layer] = cache["resid_post", layer][
                 :, :
             ]  # shape (batch_size, pgn_str_length - 1, d_model)
 
     # Not the most efficient way to do this, but it's clear and readable
     for layer in layers:
-        resid_post = resid_post_dict[layer]
+        resid_post_BLD = resid_post_dict_BLD[layer]
         # Initialize a list to hold the indexed state stacks
-        indexed_resid_posts = []
+        indexed_resid_posts_BLD = []
 
-        for batch_idx in range(games_dots.size(0)):
+        for batch_idx in range(games_dots_BL.size(0)):
             # Get the indices for the current batch
-            dots_indices_for_batch = games_dots[batch_idx]
+            dots_indices_for_batch_L = games_dots_BL[batch_idx]
 
             # Index the state_stack for the current batch
-            indexed_resid_post = resid_post[batch_idx, dots_indices_for_batch]
+            indexed_resid_post_LD = resid_post_BLD[batch_idx, dots_indices_for_batch_L]
 
             # Append the result to the list
-            indexed_resid_posts.append(indexed_resid_post)
+            indexed_resid_posts_BLD.append(indexed_resid_post_LD)
 
         # Stack the indexed state stacks along the first dimension
-        resid_post_dict[layer] = torch.stack(
-            indexed_resid_posts
+        resid_post_dict_BLD[layer] = torch.stack(
+            indexed_resid_posts_BLD
         )  # shape (batch_size, num_white_moves, d_model)
 
-    return state_stack_one_hot, resid_post_dict
+    return state_stack_one_hot_MBLRRC, resid_post_dict_BLD
 
 
 def populate_probes_dict(
@@ -349,7 +353,7 @@ def populate_probes_dict(
         linear_probe_name = (
             f"{PROBE_DIR}{logging_dict['model_name']}_{config.linear_probe_name}_layer_{layer}.pth"
         )
-        linear_probe = torch.randn(
+        linear_probe_MDRRC = torch.randn(
             train_params.modes,
             D_MODEL,
             config.num_rows,
@@ -358,17 +362,17 @@ def populate_probes_dict(
             requires_grad=False,
             device=DEVICE,
         ) / torch.sqrt(torch.tensor(D_MODEL))
-        linear_probe.requires_grad = True
-        logger.info(f"linear_probe shape: {linear_probe.shape}")
+        linear_probe_MDRRC.requires_grad = True
+        logger.info(f"linear_probe shape: {linear_probe_MDRRC.shape}")
 
         optimiser = torch.optim.AdamW(
-            [linear_probe],
+            [linear_probe_MDRRC],
             lr=train_params.lr,
             betas=(train_params.beta1, train_params.beta2),
             weight_decay=train_params.wd,
         )
         probes[layer] = SingleProbe(
-            linear_probe=linear_probe,
+            linear_probe=linear_probe_MDRRC,
             probe_name=linear_probe_name,
             optimiser=optimiser,
             logging_dict=logging_dict,
@@ -378,33 +382,35 @@ def populate_probes_dict(
 
 @jaxtyped(typechecker=beartype)
 def linear_probe_forward_pass(
-    linear_probe: Float[Tensor, "modes d_model rows cols options"],
-    state_stack_one_hot: Int[Tensor, "modes batch num_white_moves rows cols options"],
-    resid_post: Float[Tensor, "batch num_white_moves d_model"],
+    linear_probe_MDRRC: Float[Tensor, "modes d_model rows cols options"],
+    state_stack_one_hot_MBLRRC: Int[Tensor, "modes batch num_white_moves rows cols options"],
+    resid_post_BLD: Float[Tensor, "batch num_white_moves d_model"],
     one_hot_range: int,
 ) -> tuple[Tensor, Tensor]:
     """Outputs are scalar tensors."""
-    probe_out = einsum(
+    probe_out_MBLRRC = einsum(
         "batch pos d_model, modes d_model rows cols options -> modes batch pos rows cols options",
-        resid_post,
-        linear_probe,
+        resid_post_BLD,
+        linear_probe_MDRRC,
     )
 
-    assert probe_out.shape == state_stack_one_hot.shape
+    assert probe_out_MBLRRC.shape == state_stack_one_hot_MBLRRC.shape
 
-    accuracy = (probe_out[0].argmax(-1) == state_stack_one_hot[0].argmax(-1)).float().mean()
+    accuracy = (
+        (probe_out_MBLRRC[0].argmax(-1) == state_stack_one_hot_MBLRRC[0].argmax(-1)).float().mean()
+    )
 
-    probe_log_probs = probe_out.log_softmax(-1)
-    probe_correct_log_probs = (
+    probe_log_probs_MBLRRC = probe_out_MBLRRC.log_softmax(-1)
+    probe_correct_log_probs_MLRR = (
         einops.reduce(
-            probe_log_probs * state_stack_one_hot,
+            probe_log_probs_MBLRRC * state_stack_one_hot_MBLRRC,
             "modes batch pos rows cols options -> modes pos rows cols",
             "mean",
         )
         * one_hot_range
     )  # Multiply to correct for the mean over one_hot_range
     # probe_correct_log_probs shape (modes, num_white_moves, num_rows, num_cols)
-    loss = -probe_correct_log_probs[0, :].mean(0).sum()
+    loss = -probe_correct_log_probs_MLRR[0, :].mean(0).sum()
 
     return loss, accuracy
 
@@ -448,15 +454,15 @@ def estimate_loss(
         for k in range(0, eval_iters, BATCH_SIZE):
             indices = split_indices[split][k : k + BATCH_SIZE]
 
-            state_stack_one_hot, resid_post_dict = prepare_data_batch(
+            state_stack_one_hot_MBLRRC, resid_post_dict_BLD = prepare_data_batch(
                 indices, probe_data, config, layers
             )
 
             for layer in probes:
                 loss, accuracy = linear_probe_forward_pass(
                     probes[layer].linear_probe,
-                    state_stack_one_hot,
-                    resid_post_dict[layer],
+                    state_stack_one_hot_MBLRRC,
+                    resid_post_dict_BLD[layer],
                     one_hot_range,
                 )
                 losses[layer].append(loss.item())
@@ -508,18 +514,18 @@ def train_linear_probe_cross_entropy(
         full_train_indices = torch.randperm(train_games)
         for i in tqdm(range(0, train_games, BATCH_SIZE)):
 
-            indices = full_train_indices[i : i + BATCH_SIZE]  # shape batch_size
+            indices_B = full_train_indices[i : i + BATCH_SIZE]  # shape batch_size
 
-            state_stack_one_hot, resid_post_dict = prepare_data_batch(
-                indices, probe_data, config, layers
+            state_stack_one_hot_MBLRRC, resid_post_dict_BLD = prepare_data_batch(
+                indices_B, probe_data, config, layers
             )
 
             for layer in probes:
 
                 probes[layer].loss, probes[layer].accuracy = linear_probe_forward_pass(
                     probes[layer].linear_probe,
-                    state_stack_one_hot,
-                    resid_post_dict[layer],
+                    state_stack_one_hot_MBLRRC,
+                    resid_post_dict_BLD[layer],
                     one_hot_range,
                 )
 
@@ -615,20 +621,20 @@ def construct_linear_probe_data(
     model = get_transformer_lens_model(model_name, n_layers, device)
     user_state_dict_one_hot_mapping, df = process_dataframe(input_dataframe_file, config)
     df = df[:max_games]
-    board_seqs_string = get_board_seqs_string(df)
-    board_seqs_int = get_board_seqs_int(df)
-    skill_stack = None
+    board_seqs_string_Bl = get_board_seqs_string(df)
+    board_seqs_int_Bl = get_board_seqs_int(df)
+    skill_stack_B = None
     if config.probing_for_skill:
-        skill_stack = get_skill_stack(config, df)
+        skill_stack_B = get_skill_stack(config, df)
     custom_indices = get_custom_indices(config.custom_indexing_function, df)
 
-    pgn_str_length = len(board_seqs_string[0])
-    num_games = len(board_seqs_string)
+    pgn_str_length = len(board_seqs_string_Bl[0])
+    num_games = len(board_seqs_string_Bl)
 
-    assert board_seqs_int.shape == (num_games, pgn_str_length)
+    assert board_seqs_int_Bl.shape == (num_games, pgn_str_length)
 
-    if skill_stack is not None:
-        assert skill_stack.shape == (num_games,)
+    if skill_stack_B is not None:
+        assert skill_stack_B.shape == (num_games,)
 
     _, shortest_game_length_in_moves = custom_indices.shape
     assert custom_indices.shape == (num_games, shortest_game_length_in_moves)
@@ -639,9 +645,9 @@ def construct_linear_probe_data(
     probe_data = LinearProbeData(
         model=model,
         custom_indices=custom_indices,
-        board_seqs_int=board_seqs_int,
-        board_seqs_string=board_seqs_string,
-        skill_stack=skill_stack,
+        board_seqs_int=board_seqs_int_Bl,
+        board_seqs_string=board_seqs_string_Bl,
+        skill_stack=skill_stack_B,
         user_state_dict_one_hot_mapping=user_state_dict_one_hot_mapping,
     )
 
@@ -680,8 +686,8 @@ def test_linear_probe_cross_entropy(
     logging_dict["num_games"] = num_games
 
     checkpoint = torch.load(linear_probe_name, map_location=DEVICE)
-    linear_probe = checkpoint["linear_probe"]
-    logger.info(f"linear_probe shape: {linear_probe.shape}")
+    linear_probe_MDRRC = checkpoint["linear_probe"]
+    logger.info(f"linear_probe shape: {linear_probe_MDRRC.shape}")
     logger.info(f"custom_indices shape: {probe_data.custom_indices.shape}")
 
     layer = logging_dict["layer"]
@@ -691,14 +697,17 @@ def test_linear_probe_cross_entropy(
     loss_list = []
     full_test_indices = torch.arange(0, num_games)
     for i in tqdm(range(0, num_games, BATCH_SIZE)):
-        indices = full_test_indices[i : i + BATCH_SIZE]  # shape batch_size
+        indices_B = full_test_indices[i : i + BATCH_SIZE]  # shape batch_size
 
-        state_stack_one_hot, resid_post_dict = prepare_data_batch(
-            indices, probe_data, config, [layer]
+        state_stack_one_hot_MBLRRC, resid_post_dict_BLD = prepare_data_batch(
+            indices_B, probe_data, config, [layer]
         )
 
         loss, accuracy = linear_probe_forward_pass(
-            linear_probe, state_stack_one_hot, resid_post_dict[layer], one_hot_range
+            linear_probe_MDRRC,
+            state_stack_one_hot_MBLRRC,
+            resid_post_dict_BLD[layer],
+            one_hot_range,
         )
 
         accuracy_list.append(accuracy.item())
@@ -834,6 +843,8 @@ if __name__ == "__main__":
         config = chess_utils.piece_config
         if args.probe == "skill":
             config = chess_utils.skill_config
+
+        config = chess_utils.pin_config
 
         player_color = PlayerColor.WHITE
         first_layer = 0

@@ -51,6 +51,36 @@ To perform skill interventions, you can train a set of 8 skill probes using `tra
 
 Then, follow these directions to use them to perform skill interventions: https://github.com/adamkarvonen/chess_gpt_eval/tree/master/nanogpt
 
+# Shape Annotations
+
+I've been using this tip from Noam Shazeer:
+
+Dimension key (from https://medium.com/@NoamShazeer/shape-suffixes-good-coding-style-f836e72e24fd):
+
+M = modes
+
+l  = seq length before indexing
+
+L  = seq length after indexing
+
+B = batch_size
+
+R = rows (or cols)
+
+C = classes for one hot encoding
+
+D = d_model of the GPT (512)
+
+For example
+
+```
+probe_out_MBLRRC = einsum(
+    "batch pos d_model, modes d_model rows cols options -> modes batch pos rows cols options",
+    resid_post_BLD,
+    linear_probe_MDRRC,
+)
+```
+
 # Useful links
 
 All code, models, and datasets are open source.
