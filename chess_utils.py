@@ -698,6 +698,14 @@ othello_config = Config(
     othello=True,
 )
 
+othello_valid_moves_config = Config(
+    min_val=0,
+    max_val=1,
+    custom_board_state_function=othello_utils.games_batch_to_valid_moves_BLRRC,
+    linear_probe_name="othello_valid_moves_probe",
+    othello=True,
+)
+
 
 def find_config_by_name(config_name: str) -> Config:
     """
