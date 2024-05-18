@@ -12,7 +12,10 @@ from jaxtyping import Int, Float, jaxtyped
 from torch import Tensor
 from beartype import beartype
 import collections
+
 import chess_utils
+import othello_engine_utils
+import othello_utils
 from chess_utils import PlayerColor, Config
 import argparse
 
@@ -38,6 +41,8 @@ BATCH_SIZE = 2
 D_MODEL = 512
 N_HEADS = 8
 WANDB_LOGGING = False
+
+OTHELLO_SEQ_LEN = 59
 
 DEVICE = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -106,6 +111,10 @@ class LinearProbeData:
 def get_transformer_lens_model(
     model_name: str, n_layers: int, device: torch.device
 ) -> HookedTransformer:
+
+    if model_name == "Baidicoot/Othello-GPT-Transformer-Lens":
+        return HookedTransformer.from_pretrained(model_name).to(device)
+
     cfg = HookedTransformerConfig(
         n_layers=n_layers,
         d_model=D_MODEL,
@@ -194,14 +203,18 @@ def init_logging_dict(
     return logging_dict
 
 
-def get_board_seqs_string(df: pd.DataFrame) -> list[str]:
-    row_length = len(df["transcript"].iloc[0])
+def get_othello_seqs_string(df: pd.DataFrame) -> list[str]:
+    key = "tokens"
 
-    assert all(
-        df["transcript"].apply(lambda x: len(x) == row_length)
-    ), "Not all transcripts are of length {}".format(row_length)
+    # convert every string to a list of integers
+    if isinstance(df[key].iloc[0], str):
+        df[key] = df[key].apply(lambda x: list(map(int, x.strip("[] ").split(","))))
 
-    board_seqs_string_Bl = df["transcript"]
+    board_seqs_string_Bl = df[key].tolist()
+    board_seqs_string_Bl = othello_engine_utils.to_string(board_seqs_string_Bl)
+
+    for i in range(len(board_seqs_string_Bl)):
+        board_seqs_string_Bl[i] = board_seqs_string_Bl[i][:OTHELLO_SEQ_LEN]
 
     logger.info(
         f"Number of games: {len(board_seqs_string_Bl)},length of a game in chars: {len(board_seqs_string_Bl[0])}"
@@ -209,8 +222,39 @@ def get_board_seqs_string(df: pd.DataFrame) -> list[str]:
     return board_seqs_string_Bl
 
 
+def get_board_seqs_string(df: pd.DataFrame) -> list[str]:
+
+    if "tokens" in df.columns:
+        return get_othello_seqs_string(df)
+
+    key = "transcript"
+    row_length = len(df[key].iloc[0])
+
+    assert all(
+        df[key].apply(lambda x: len(x) == row_length)
+    ), "Not all transcripts are of length {}".format(row_length)
+
+    board_seqs_string_Bl = df[key]
+
+    logger.info(
+        f"Number of games: {len(board_seqs_string_Bl)},length of a game in chars: {len(board_seqs_string_Bl[0])}"
+    )
+    return board_seqs_string_Bl
+
+
+def get_othello_seqs_int(df: pd.DataFrame) -> Int[Tensor, "num_games pgn_str_length"]:
+    tokens_list = df["tokens"].tolist()
+    tokens_tensor_Bl = torch.tensor(tokens_list)
+    tokens_tensor_Bl = tokens_tensor_Bl[:, :OTHELLO_SEQ_LEN]  # OthelloGPT has context length of 59
+    logger.info(f"tokens_tensor shape: {tokens_tensor_Bl.shape}")
+    return tokens_tensor_Bl
+
+
 @jaxtyped(typechecker=beartype)
 def get_board_seqs_int(df: pd.DataFrame) -> Int[Tensor, "num_games pgn_str_length"]:
+    if "tokens" in df.columns:
+        return get_othello_seqs_int(df)
+
     encoded_df = df["transcript"].apply(encode)
     logger.info(encoded_df.head())
     board_seqs_int_Bl = torch.tensor(encoded_df.apply(list).tolist())
@@ -228,13 +272,11 @@ def get_skill_stack(config: Config, df: pd.DataFrame) -> Int[Tensor, "num_games"
     return skill_stack_B
 
 
-# @jaxtyped(typechecker=beartype) # typechecking not supported for callable
-def get_custom_indices(
-    custom_indexing_function: callable, df: pd.DataFrame
-) -> Int[Tensor, "num_games num_white_moves"]:
-    custom_indices_BL = chess_utils.find_custom_indices(custom_indexing_function, df)
-    logger.info(f"custom_indices shape: {custom_indices_BL.shape}")
-    return custom_indices_BL
+def get_othello_state_stack(
+    config: chess_utils.Config, games_str_Bl: list[str]
+) -> Int[Tensor, "modes batch num_white_moves num_rows num_cols"]:
+    state_stack_MBLRRC = config.custom_board_state_function(games_str_Bl)
+    return state_stack_MBLRRC
 
 
 @jaxtyped(typechecker=beartype)
@@ -263,50 +305,57 @@ def prepare_data_batch(
     else:
         games_skill_B = None
 
-    state_stack_MBlRR = chess_utils.create_state_stacks(
-        games_str_Bl, config.custom_board_state_function, games_skill_B
-    )  # shape (modes, batch_size, pgn_str_length, num_rows, num_cols)
-    indexed_state_stacks_MBLRR = []
+    if config.othello:
+        state_stack_one_hot_BlRRC = othello_utils.games_batch_to_state_stack_mine_yours_BLRRC(
+            games_str_Bl
+        ).to(DEVICE)
+        state_stack_one_hot_MBlRRC = einops.repeat(
+            state_stack_one_hot_BlRRC, "B L R1 R2 C -> M B L R1 R2 C", M=TRAIN_PARAMS.modes
+        )
+
+    else:
+        state_stack_MBlRR = chess_utils.create_state_stacks(
+            games_str_Bl, config.custom_board_state_function, games_skill_B
+        )  # shape (modes, batch_size, pgn_str_length, num_rows, num_cols)
+
+        state_stack_one_hot_MBlRRC = chess_utils.state_stack_to_one_hot(
+            TRAIN_PARAMS.modes,
+            config.num_rows,
+            config.num_cols,
+            config.min_val,
+            config.max_val,
+            DEVICE,
+            state_stack_MBlRR,
+            probe_data.user_state_dict_one_hot_mapping,
+        ).to(DEVICE)
+
+    indexed_state_stacks_one_hot_MBLRRC = []
 
     for batch_idx in range(BATCH_SIZE):
         # Get the indices for the current batch
         dots_indices_for_batch_L = games_dots_BL[batch_idx]
 
         # Index the state_stack for the current batch
-        indexed_state_stack_MLRR = state_stack_MBlRR[:, batch_idx, dots_indices_for_batch_L, :, :]
+        indexed_state_stack_one_hot_MLRRC = state_stack_one_hot_MBlRRC[
+            :, batch_idx, dots_indices_for_batch_L, :, :, :
+        ]
 
         # Append the result to the list
-        indexed_state_stacks_MBLRR.append(indexed_state_stack_MLRR)
+        indexed_state_stacks_one_hot_MBLRRC.append(indexed_state_stack_one_hot_MLRRC)
 
     # Stack the indexed state stacks along the first dimension
-    state_stack_BMLRR = torch.stack(
-        indexed_state_stacks_MBLRR
-    )  # shape (batch_size, modes, num_white_moves, num_rows, num_cols)
+    state_stack_one_hot_BMLRRC = torch.stack(indexed_state_stacks_one_hot_MBLRRC)
 
     # Use einops to rearrange the dimensions after stacking
-    state_stack_MBLRR = einops.rearrange(
-        state_stack_BMLRR, "batch modes pos row col -> modes batch pos row col"
-    )  # shape (modes, batch_size, num_white_moves, num_rows, num_cols)
-
-    state_stack_one_hot_MBLRRC = chess_utils.state_stack_to_one_hot(
-        TRAIN_PARAMS.modes,
-        config.num_rows,
-        config.num_cols,
-        config.min_val,
-        config.max_val,
-        DEVICE,
-        state_stack_MBLRR,
-        probe_data.user_state_dict_one_hot_mapping,
-    ).to(
-        DEVICE
-    )  # shape (modes, batch_size, num_white_moves, num_rows, num_cols, num_options)
+    state_stack_one_hot_MBLRRC = einops.rearrange(
+        state_stack_one_hot_BMLRRC,
+        "batch modes pos row col classes -> modes batch pos row col classes",
+    )
 
     resid_post_dict_BLD = {}
 
     with torch.inference_mode():
-        _, cache = probe_data.model.run_with_cache(
-            games_int_Bl.to(DEVICE)[:, :-1], return_type=None
-        )
+        _, cache = probe_data.model.run_with_cache(games_int_Bl.to(DEVICE)[:, :], return_type=None)
         for layer in layers:
             resid_post_dict_BLD[layer] = cache["resid_post", layer][
                 :, :
@@ -626,7 +675,9 @@ def construct_linear_probe_data(
     skill_stack_B = None
     if config.probing_for_skill:
         skill_stack_B = get_skill_stack(config, df)
-    custom_indices = get_custom_indices(config.custom_indexing_function, df)
+    custom_indices = chess_utils.find_custom_indices(
+        config.custom_indexing_function, board_seqs_string_Bl
+    )
 
     pgn_str_length = len(board_seqs_string_Bl[0])
     num_games = len(board_seqs_string_Bl)
@@ -844,7 +895,7 @@ if __name__ == "__main__":
         if args.probe == "skill":
             config = chess_utils.skill_config
 
-        config = chess_utils.pin_config
+        othello = False
 
         player_color = PlayerColor.WHITE
         first_layer = 0
@@ -852,15 +903,25 @@ if __name__ == "__main__":
 
         # When training a probe, you have to set all parameters such as model name, dataset prefix, etc.
         dataset_prefix = "lichess_"
+
         split = "train"
         n_layers = 8
         model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
+        indexing_function = None
+
+        if othello:
+            model_name = "Baidicoot/Othello-GPT-Transformer-Lens"
+            config = chess_utils.othello_config
+            dataset_prefix = "othello_"
+            indexing_function = othello_utils.get_othello_all_list_indices
 
         input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
         config = chess_utils.set_config_min_max_vals_and_column_name(
             config, input_dataframe_file, dataset_prefix
         )
-        config = chess_utils.update_config_using_player_color(player_color, config)
+        config = chess_utils.update_config_using_player_color(
+            player_color, config, indexing_function
+        )
 
         max_games = TRAIN_PARAMS.max_train_games + TRAIN_PARAMS.max_val_games
         probe_data = construct_linear_probe_data(

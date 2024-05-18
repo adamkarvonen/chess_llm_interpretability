@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from jaxtyping import Int, Float, jaxtyped
 from torch import Tensor
 from enum import Enum
+import othello_utils
 
 # Mapping of chess pieces to integers
 PIECE_TO_INT = {
@@ -513,19 +514,21 @@ def find_odd_indices_offset_one(moves_string: str) -> list[int]:
     return incremented_indices
 
 
-def find_custom_indices(
-    custom_indexing_fn: Callable[[str], list[int]], df: pd.DataFrame
-) -> torch.Tensor:
-    indices_series = df["transcript"].apply(custom_indexing_fn)
-    shortest_length = indices_series.apply(len).min()
+def find_custom_indices(custom_indexing_fn: Callable, games_strs_Bl: list) -> torch.Tensor:
+
+    shortest_length = 1e6
+    custom_indices = []
+    for pgn in games_strs_Bl:
+        indices = custom_indexing_fn(pgn)
+        shortest_length = min(shortest_length, len(indices))
+        custom_indices.append(indices)
     print("Shortest length:", shortest_length)
 
-    indices_series = indices_series.apply(lambda x: x[:shortest_length])
-    assert all(
-        len(lst) == shortest_length for lst in indices_series
-    ), "Not all lists have the same length"
+    for i, indices in enumerate(custom_indices):
+        custom_indices[i] = indices[:shortest_length]
 
-    indices = torch.tensor(indices_series.apply(list).tolist(), dtype=torch.int)
+    indices = torch.tensor(custom_indices, dtype=torch.int)
+
     return indices
 
 
@@ -610,6 +613,7 @@ class Config:
     # If pos_end is None, it's set to the length of the shortest game in construct_linear_probe_data()
     pos_end: Optional[int] = None
     player_color: PlayerColor = PlayerColor.WHITE
+    othello: bool = False
 
 
 piece_config = Config(
@@ -686,30 +690,45 @@ skill_config = Config(
     pos_start=25,
 )
 
+othello_config = Config(
+    min_val=-1,
+    max_val=1,
+    custom_board_state_function=othello_utils.games_batch_to_state_stack_mine_yours_BLRRC,
+    linear_probe_name="othello_mine_yours_probe",
+    othello=True,
+)
+
 
 def find_config_by_name(config_name: str) -> Config:
     """
     Finds and returns the Config instance with a matching linear_probe_name.
     """
-    all_configs = [piece_config, color_config, random_config, skill_config]
+    all_configs = [piece_config, color_config, random_config, skill_config, othello_config]
     for config in all_configs:
         if config.linear_probe_name == config_name:
             return config
     raise ValueError(f"Config with name {config_name} not found")
 
 
-def update_config_using_player_color(player_color: PlayerColor, config: Config) -> Config:
+def update_config_using_player_color(
+    player_color: PlayerColor, config: Config, custom_function: Optional[Callable] = None
+) -> Config:
     """Player color will determine which indexing function we use. In addition, we set player to white by default.
     If player is black, then we update the probe name as well."""
 
+    if custom_function:
+        config.custom_indexing_function = custom_function
+        config.player_color = player_color
+        return config
+
     if player_color == PlayerColor.WHITE:
         config.custom_indexing_function = find_dots_indices
-        config.player_color = PlayerColor.WHITE
+        config.player_color = player_color
 
     if player_color == PlayerColor.BLACK:
         config.linear_probe_name = config.linear_probe_name.replace("probe", "black_player_probe")
         config.custom_indexing_function = find_even_spaces_indices
-        config.player_color = PlayerColor.BLACK
+        config.player_color = player_color
 
     return config
 
