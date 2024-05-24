@@ -41,7 +41,13 @@ Test skill probe:
 
 See all options: `python train_test_chess.py -h`
 
+To add new functions, refer to `utils/custom_functions_guide.md`.
+
 All experiments in this repo can be done with less than 1 GB of VRAM. Training probes on the 8 layer model takes about 10 minutes on my RTX 3050.
+
+# OthelloGPT
+
+This repo can also be used for training linear probes on OthelloGPT. Refer to `utils/othello_data_filtering.ipynb`.
 
 # Interventions
 
@@ -50,6 +56,36 @@ To perform board state interventions on one layer, run `python board_state_inter
 To perform skill interventions, you can train a set of 8 skill probes using `train_test_chess.py` or generate a set of 8 contrastive activations using `caa.py`. Note that contrastive activations tend to work a little better. If you want to use probe derived interventions, use this script to create activation files from the probes: `utils/create_skill_intervention_from_skill_probe.ipynb`.
 
 Then, follow these directions to use them to perform skill interventions: https://github.com/adamkarvonen/chess_gpt_eval/tree/master/nanogpt
+
+# Shape Annotations
+
+I've been using this tip from Noam Shazeer:
+
+Dimension key (from https://medium.com/@NoamShazeer/shape-suffixes-good-coding-style-f836e72e24fd):
+
+M = modes
+
+l  = seq length before indexing
+
+L  = seq length after indexing
+
+B = batch_size
+
+R = rows (or cols)
+
+C = classes for one hot encoding
+
+D = d_model of the GPT (512)
+
+For example
+
+```
+probe_out_MBLRRC = einsum(
+    "batch pos d_model, modes d_model rows cols options -> modes batch pos rows cols options",
+    resid_post_BLD,
+    linear_probe_MDRRC,
+)
+```
 
 # Useful links
 
