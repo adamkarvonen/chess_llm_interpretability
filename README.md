@@ -41,7 +41,13 @@ Test skill probe:
 
 See all options: `python train_test_chess.py -h`
 
+To add new functions, refer to `utils/custom_functions_guide.md`.
+
 All experiments in this repo can be done with less than 1 GB of VRAM. Training probes on the 8 layer model takes about 10 minutes on my RTX 3050.
+
+# OthelloGPT
+
+This repo can also be used for training linear probes on OthelloGPT. Refer to `utils/othello_data_filtering.ipynb`.
 
 # Interventions
 
