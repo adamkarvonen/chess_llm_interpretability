@@ -306,9 +306,7 @@ def prepare_data_batch(
         games_skill_B = None
 
     if config.othello:
-        state_stack_one_hot_BlRRC = othello_utils.games_batch_to_state_stack_mine_yours_BLRRC(
-            games_str_Bl
-        ).to(DEVICE)
+        state_stack_one_hot_BlRRC = config.custom_board_state_function(games_str_Bl).to(DEVICE)
         state_stack_one_hot_MBlRRC = einops.repeat(
             state_stack_one_hot_BlRRC, "B L R1 R2 C -> M B L R1 R2 C", M=TRAIN_PARAMS.modes
         )
