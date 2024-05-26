@@ -72,7 +72,7 @@ def test_piece_train_linear_probe_cross_entropy():
         probes[probe].probe_name = probes[probe].probe_name.replace("tf_lens", "TEST_ONLY_tf_lens")
 
     final_accs = train_test_chess.train_linear_probe_cross_entropy(
-        probes, probe_data, config, TRAIN_PARAMS
+        probes, probe_data, config, TRAIN_PARAMS, DEVICE
     )
 
     expected_final_accs = {
@@ -134,7 +134,7 @@ def test_skill_train_linear_probe_cross_entropy():
         probes[probe].probe_name = probes[probe].probe_name.replace("tf_lens", "TEST_ONLY_tf_lens")
 
     final_accs = train_test_chess.train_linear_probe_cross_entropy(
-        probes, probe_data, config, TRAIN_PARAMS
+        probes, probe_data, config, TRAIN_PARAMS, DEVICE
     )
 
     expected_final_accs = {
@@ -204,7 +204,7 @@ def test_linear_probe_cross_entropy_test():
             )
 
             result = train_test_chess.test_linear_probe_cross_entropy(
-                probe_file_location, probe_data, config, logging_dict, TRAIN_PARAMS
+                probe_file_location, probe_data, config, logging_dict, TRAIN_PARAMS, DEVICE
             )
 
             assert (

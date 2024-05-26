@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from jaxtyping import Int, Float, jaxtyped
 from torch import Tensor
 from enum import Enum
+import einops
+
 import othello_utils
 
 # Mapping of chess pieces to integers
@@ -711,7 +713,15 @@ def find_config_by_name(config_name: str) -> Config:
     """
     Finds and returns the Config instance with a matching linear_probe_name.
     """
-    all_configs = [piece_config, color_config, random_config, skill_config, othello_config]
+    all_configs = [
+        piece_config,
+        color_config,
+        random_config,
+        skill_config,
+        threat_config,
+        legal_move_config,
+        othello_config,
+    ]
     for config in all_configs:
         if config.linear_probe_name == config_name:
             return config
@@ -758,3 +768,122 @@ def set_config_min_max_vals_and_column_name(
     config.max_val = df[config.column_name].max()
 
     return config
+
+
+def mask_initial_one_hot_board_states(
+    one_hot_list_MBLRRC: Int[Tensor, "batch_size num_rows num_cols num_options"],
+    device: torch.device,
+    config: Config,
+    skill: Optional[torch.Tensor] = None,
+) -> Int[Tensor, "batch_size num_rows num_cols num_options"]:
+    """Mask off all board states that are shared with the initial board state.
+    Otherwise the initial board state will dominate the common states."""
+    initial_board = chess.Board()
+    initial_state_RR = config.custom_board_state_function(initial_board, skill)
+
+    M, B, L, R1, R2, C = one_hot_list_MBLRRC.shape
+
+    initial_state_MBLRR = einops.repeat(initial_state_RR, "R1 R2 -> M B L R1 R2", M=M, B=B, L=L)
+    initial_state_MBLRRC = state_stack_to_one_hot(
+        M,
+        config.num_rows,
+        config.num_cols,
+        config.min_val,
+        config.max_val,
+        device,
+        initial_state_MBLRR,
+    )
+
+    mask = (initial_state_MBLRRC == 1) & (one_hot_list_MBLRRC == 1)
+    one_hot_list_MBLRRC[mask] = 0
+    return one_hot_list_MBLRRC
+
+
+def calculate_f1(probe_out_MBLRRC: torch.Tensor, state_stack_one_hot_MBLRRC: torch.Tensor) -> float:
+    """Calculate the F1 score for the probe."""
+
+    epsilon = 1e-8
+
+    probe_out_BLRRC = probe_out_MBLRRC[0]
+    state_stack_BLRRC = state_stack_one_hot_MBLRRC[0]
+
+    true_positives_BLRRC = (probe_out_BLRRC == 1) & (state_stack_BLRRC == 1)
+    false_positives_BLRRC = (probe_out_BLRRC == 1) & (state_stack_BLRRC == 0)
+    false_negatives_BLRRC = (probe_out_BLRRC == 0) & (state_stack_BLRRC == 1)
+
+    true_positives_C = einops.reduce(true_positives_BLRRC, "B L R1 R2 C -> C", "sum")
+    false_positives_C = einops.reduce(false_positives_BLRRC, "B L R1 R2 C -> C", "sum")
+    false_negatives_C = einops.reduce(false_negatives_BLRRC, "B L R1 R2 C -> C", "sum")
+
+    true_positives = true_positives_C.sum()
+    false_positives = false_positives_C.sum()
+    false_negatives = false_negatives_C.sum()
+
+    precision = true_positives / (true_positives + false_positives + epsilon)
+    recall = true_positives / (true_positives + false_negatives + epsilon)
+
+    f1 = 2 * (precision * recall) / (precision + recall + epsilon)
+
+    precision_C = true_positives_C / (true_positives_C + false_positives_C + epsilon)
+    recall_C = true_positives_C / (true_positives_C + false_negatives_C + epsilon)
+
+    f1_C = 2 * (precision_C * recall_C) / (precision_C + recall_C + epsilon)
+
+    return f1, f1_C, true_positives, false_positives, false_negatives
+
+
+def f1_calculation_router(
+    probe_out_MBLRRC: torch.Tensor,
+    state_stack_one_hot_MBLRRC: torch.Tensor,
+    config: Config,
+    device: torch.device,
+) -> dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    """Calculate the F1 score for the probe."""
+
+    M, B, L, R1, R2, C = state_stack_one_hot_MBLRRC.shape
+
+    # - config.min_val is paying for the mistake of not using 0 as the min_val
+    probe_out_MBLRR = torch.argmax(probe_out_MBLRRC, dim=-1) + config.min_val
+    probe_out_MBLRRC = state_stack_to_one_hot(
+        M, R1, R2, config.min_val, config.max_val, device, probe_out_MBLRR
+    )
+
+    result = {}
+    result["f1"] = calculate_f1(probe_out_MBLRRC, state_stack_one_hot_MBLRRC)
+
+    if config.custom_board_state_function == board_to_piece_state:
+        blank_mask_probe_out_MBLRRC = probe_out_MBLRRC.clone()
+        blank_mask_probe_out_MBLRRC[..., 6] = 0
+
+        blank_mask_state_stack_one_hot_MBLRRC = state_stack_one_hot_MBLRRC.clone()
+        blank_mask_state_stack_one_hot_MBLRRC[..., 6] = 0
+
+        result["f1_no_blank"] = calculate_f1(
+            blank_mask_probe_out_MBLRRC, blank_mask_state_stack_one_hot_MBLRRC
+        )
+
+        blank_initial_mask_probe_out_MBLRRC = mask_initial_one_hot_board_states(
+            blank_mask_probe_out_MBLRRC, device, config
+        )
+        blank_initial_mask_state_stack_one_hot_MBLRRC = mask_initial_one_hot_board_states(
+            blank_mask_state_stack_one_hot_MBLRRC, device, config
+        )
+
+        result["f1_no_blank_initial"] = calculate_f1(
+            blank_initial_mask_probe_out_MBLRRC, blank_initial_mask_state_stack_one_hot_MBLRRC
+        )
+
+    elif (
+        config.custom_board_state_function
+        == othello_utils.games_batch_to_state_stack_mine_yours_BLRRC
+    ):
+        blank_mask_probe_out_MBLRRC = probe_out_MBLRRC.clone()
+        blank_mask_probe_out_MBLRRC[..., 1] = 0
+
+        blank_mask_state_stack_one_hot_MBLRRC = state_stack_one_hot_MBLRRC.clone()
+        blank_mask_state_stack_one_hot_MBLRRC[..., 1] = 0
+
+        result["f1_no_blank"] = calculate_f1(
+            blank_mask_probe_out_MBLRRC, blank_mask_state_stack_one_hot_MBLRRC
+        )
+    return result

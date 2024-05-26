@@ -93,6 +93,7 @@ class SingleProbe:
     logging_dict: dict
     loss: torch.Tensor = torch.tensor(0.0)
     accuracy: torch.Tensor = torch.tensor(0.0)
+    f1: torch.Tensor = torch.tensor(0.0)
     accuracy_queue: collections.deque = field(
         default_factory=lambda: collections.deque(maxlen=1000)
     )
@@ -433,7 +434,13 @@ def linear_probe_forward_pass(
     state_stack_one_hot_MBLRRC: Int[Tensor, "modes batch num_white_moves rows cols options"],
     resid_post_BLD: Float[Tensor, "batch num_white_moves d_model"],
     one_hot_range: int,
-) -> tuple[Tensor, Tensor]:
+    config: Optional[Config] = None,
+    device: Optional[str] = None,
+) -> tuple[
+    Tensor,
+    Tensor,
+    dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+]:
     """Outputs are scalar tensors."""
     probe_out_MBLRRC = einsum(
         "batch pos d_model, modes d_model rows cols options -> modes batch pos rows cols options",
@@ -459,7 +466,14 @@ def linear_probe_forward_pass(
     # probe_correct_log_probs shape (modes, num_white_moves, num_rows, num_cols)
     loss = -probe_correct_log_probs_MLRR[0, :].mean(0).sum()
 
-    return loss, accuracy
+    if config is not None:
+        f1_dict = chess_utils.f1_calculation_router(
+            probe_out_MBLRRC, state_stack_one_hot_MBLRRC, config, device
+        )
+    else:
+        f1_dict = {}
+
+    return loss, accuracy, f1_dict
 
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
@@ -506,7 +520,7 @@ def estimate_loss(
             )
 
             for layer in probes:
-                loss, accuracy = linear_probe_forward_pass(
+                loss, accuracy, empty_f1_dict = linear_probe_forward_pass(
                     probes[layer].linear_probe,
                     state_stack_one_hot_MBLRRC,
                     resid_post_dict_BLD[layer],
@@ -525,6 +539,7 @@ def train_linear_probe_cross_entropy(
     probe_data: LinearProbeData,
     config: Config,
     train_params: TrainingParams,
+    device: torch.device,
 ) -> dict[int, float]:
     """Trains a linear probe on the train set, contained in probe_data. Saves all probes to disk.
     Returns a dict of layer: final avg_acc over the last 1,000 iterations.
@@ -569,12 +584,16 @@ def train_linear_probe_cross_entropy(
 
             for layer in probes:
 
-                probes[layer].loss, probes[layer].accuracy = linear_probe_forward_pass(
+                probes[layer].loss, probes[layer].accuracy, f1_dict = linear_probe_forward_pass(
                     probes[layer].linear_probe,
                     state_stack_one_hot_MBLRRC,
                     resid_post_dict_BLD[layer],
                     one_hot_range,
+                    config,
+                    device,
                 )
+
+                probes[layer].f1 = f1_dict["f1"][0]
 
                 probes[layer].loss.backward()
                 probes[layer].optimiser.step()
@@ -593,13 +612,14 @@ def train_linear_probe_cross_entropy(
                 for layer in probes:
                     avg_acc = sum(probes[layer].accuracy_queue) / len(probes[layer].accuracy_queue)
                     logger.info(
-                        f"epoch {epoch}, iter {i}, layer {layer}, acc {probes[layer].accuracy:.3f}, loss {probes[layer].loss:.3f}, avg acc {avg_acc:.3f}"
+                        f"epoch {epoch}, iter {i}, layer {layer}, acc {probes[layer].accuracy:.3f}, f1 {probes[layer].f1:.3f}, loss {probes[layer].loss:.3f}, avg acc {avg_acc:.3f}"
                     )
                     if WANDB_LOGGING:
                         wandb.log(
                             {
                                 f"layer_{layer}_loss": probes[layer].loss,
                                 f"layer_{layer}_acc": probes[layer].accuracy,
+                                f"layer_{layer}_f1": probes[layer].f1,
                                 f"layer_{layer}_avg_acc": avg_acc,
                             }
                         )
@@ -717,6 +737,7 @@ def test_linear_probe_cross_entropy(
     config: Config,
     logging_dict: dict,
     train_params: TrainingParams,
+    device: torch.device,
 ) -> float:
     """Takes a linear probe and tests it on the test set, contained in probe_data. Saves the results to a pickle file.
     Returns a float representing the average accuracy of the probe on the test set. This is also used as an end to end test for the function.
@@ -744,6 +765,7 @@ def test_linear_probe_cross_entropy(
     current_iter = 0
     accuracy_list = []
     loss_list = []
+    f1_list = []
     full_test_indices = torch.arange(0, num_games)
     for i in tqdm(range(0, num_games, BATCH_SIZE)):
         indices_B = full_test_indices[i : i + BATCH_SIZE]  # shape batch_size
@@ -752,26 +774,30 @@ def test_linear_probe_cross_entropy(
             indices_B, probe_data, config, [layer]
         )
 
-        loss, accuracy = linear_probe_forward_pass(
+        loss, accuracy, f1_dict = linear_probe_forward_pass(
             linear_probe_MDRRC,
             state_stack_one_hot_MBLRRC,
             resid_post_dict_BLD[layer],
             one_hot_range,
+            config,
+            device,
         )
 
         accuracy_list.append(accuracy.item())
         loss_list.append(loss.item())
+        f1_list.append(f1_dict)
 
         if i % 100 == 0:
             average_accuracy = sum(accuracy_list) / len(accuracy_list)
             logger.info(
-                f"batch {i}, average accuracy: {average_accuracy}, acc {accuracy}, loss {loss}"
+                f"batch {i}, average accuracy: {average_accuracy:.3f}, acc {accuracy:.3f}, loss {loss:.3f}, f1: {f1_dict['f1'][0]:.3f}"
             )
 
         current_iter += BATCH_SIZE
     data = {
         "accuracy": accuracy_list,
         "loss": loss_list,
+        "f1": f1_list,
     }
 
     output_probe_data_name = linear_probe_name.split("/")[-1].split(".")[0]
@@ -886,7 +912,7 @@ if __name__ == "__main__":
                 )
 
                 test_linear_probe_cross_entropy(
-                    probe_file_location, probe_data, config, logging_dict, TRAIN_PARAMS
+                    probe_file_location, probe_data, config, logging_dict, TRAIN_PARAMS, DEVICE
                 )
     elif args.mode == "train":
         config = chess_utils.piece_config
@@ -942,4 +968,4 @@ if __name__ == "__main__":
             n_layers,
         )
 
-        train_linear_probe_cross_entropy(probes, probe_data, config, TRAIN_PARAMS)
+        train_linear_probe_cross_entropy(probes, probe_data, config, TRAIN_PARAMS, DEVICE)
