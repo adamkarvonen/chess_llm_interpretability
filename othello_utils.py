@@ -42,11 +42,14 @@ def games_batch_to_valid_moves_BLRRC(batch_str_moves):
         board = OthelloBoardState()
         states = []
         for i, move in enumerate(game):
-            moves_board = t.zeros(8, 8, 1, dtype=t.int8)
+            moves_board = t.zeros(8, 8, 2, dtype=t.int8)
+            moves_board[..., 0] = 1
             board.umpire(move)
             valid_moves_list = board.get_valid_moves()
             for move in valid_moves_list:
-                moves_board[move // 8, move % 8] = 1
+                moves_board[move // 8, move % 8, 0] = 0
+                moves_board[move // 8, move % 8, 1] = 1
+            moves_board = moves_board.to(dtype=t.int8)
             states.append(moves_board)
         states = t.stack(states, axis=0)
         game_stack.append(states)
