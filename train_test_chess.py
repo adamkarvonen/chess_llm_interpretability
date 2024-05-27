@@ -931,21 +931,17 @@ if __name__ == "__main__":
         split = "train"
         n_layers = 8
         model_name = f"tf_lens_{dataset_prefix}{n_layers}layers_ckpt_no_optimizer"
-        indexing_function = None
 
         if othello:
             model_name = "Baidicoot/Othello-GPT-Transformer-Lens"
             config = chess_utils.othello_config
             dataset_prefix = "othello_"
-            indexing_function = othello_utils.get_othello_all_list_indices
 
         input_dataframe_file = f"{DATA_DIR}{dataset_prefix}{split}.csv"
         config = chess_utils.set_config_min_max_vals_and_column_name(
             config, input_dataframe_file, dataset_prefix
         )
-        config = chess_utils.update_config_using_player_color(
-            player_color, config, indexing_function
-        )
+        config = chess_utils.update_config_using_player_color(player_color, config)
 
         max_games = TRAIN_PARAMS.max_train_games + TRAIN_PARAMS.max_val_games
         probe_data = construct_linear_probe_data(

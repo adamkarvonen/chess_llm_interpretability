@@ -696,6 +696,7 @@ othello_config = Config(
     min_val=-1,
     max_val=1,
     custom_board_state_function=othello_utils.games_batch_to_state_stack_mine_yours_BLRRC,
+    custom_indexing_function=othello_utils.get_othello_all_list_indices,
     linear_probe_name="othello_mine_yours_probe",
     othello=True,
 )
@@ -704,6 +705,7 @@ othello_valid_moves_config = Config(
     min_val=0,
     max_val=1,
     custom_board_state_function=othello_utils.games_batch_to_valid_moves_BLRRC,
+    custom_indexing_function=othello_utils.get_othello_all_list_indices,
     linear_probe_name="othello_valid_moves_probe",
     othello=True,
 )
@@ -721,6 +723,7 @@ def find_config_by_name(config_name: str) -> Config:
         threat_config,
         legal_move_config,
         othello_config,
+        othello_valid_moves_config,
     ]
     for config in all_configs:
         if config.linear_probe_name == config_name:
@@ -728,14 +731,11 @@ def find_config_by_name(config_name: str) -> Config:
     raise ValueError(f"Config with name {config_name} not found")
 
 
-def update_config_using_player_color(
-    player_color: PlayerColor, config: Config, custom_function: Optional[Callable] = None
-) -> Config:
+def update_config_using_player_color(player_color: PlayerColor, config: Config) -> Config:
     """Player color will determine which indexing function we use. In addition, we set player to white by default.
     If player is black, then we update the probe name as well."""
 
-    if custom_function:
-        config.custom_indexing_function = custom_function
+    if config.othello == True:
         config.player_color = player_color
         return config
 
@@ -842,7 +842,7 @@ def f1_calculation_router(
 
     M, B, L, R1, R2, C = state_stack_one_hot_MBLRRC.shape
 
-    # - config.min_val is paying for the mistake of not using 0 as the min_val
+    # + config.min_val is paying for the mistake of not using 0 as the min_val
     probe_out_MBLRR = torch.argmax(probe_out_MBLRRC, dim=-1) + config.min_val
     probe_out_MBLRRC = state_stack_to_one_hot(
         M, R1, R2, config.min_val, config.max_val, device, probe_out_MBLRR
